@@ -1,0 +1,41 @@
+<?php
+declare(strict_types=1);
+require_once __DIR__ . '/app/includes/layout.php';
+$user = require_permission('visitors'); $pdo = db();
+function visitor_id(mixed $v): int { $id=filter_var($v,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]); return $id===false?0:(int)$id; }
+function valid_datetime_local(mixed $v): ?string { $raw=(string)$v; $date=DateTime::createFromFormat('Y-m-d\TH:i',$raw); return $date&&$date->format('Y-m-d\TH:i')===$raw?$date->format('Y-m-d H:i:s'):null; }
+if ($_SERVER['REQUEST_METHOD']==='POST') { require_valid_csrf(); try { $action=(string)($_POST['action']??''); if ($action==='check_out') { $id=visitor_id($_POST['id']??null); $out=valid_datetime_local($_POST['time_out']??null); if(!$id||!$out) throw new RuntimeException('Enter a valid check-out time.'); $s=$pdo->prepare('UPDATE visitors SET time_out=:out WHERE id=:id AND time_out IS NULL'); $s->execute(['out'=>$out,'id'=>$id]); if(!$s->rowCount()) throw new RuntimeException('Visitor record was not found or is already checked out.'); set_flash('Visitor checked out.'); }
+elseif($action==='save_visitor') { $tenantId=visitor_id($_POST['tenant_id']??null); $name=normalize_upper((string)($_POST['visitor_name']??''))??''; $idNo=normalize_upper((string)($_POST['visitor_id_no']??''))??''; $purpose=trim((string)($_POST['purpose']??'')); $in=valid_datetime_local($_POST['time_in']??null); if(!$tenantId||$name===''||mb_strlen($name)>150||mb_strlen($idNo)>100||mb_strlen($purpose)>255||!$in) throw new RuntimeException('Tenant, visitor name, and a valid check-in time are required.'); $s=$pdo->prepare("SELECT 1 FROM tenants WHERE id=:id AND status='active'");$s->execute(['id'=>$tenantId]);if(!$s->fetchColumn())throw new RuntimeException('Select an active tenant.'); $pdo->prepare('INSERT INTO visitors (tenant_id,visitor_name,visitor_id_no,purpose,time_in,recorded_by) VALUES (:tenant_id,:name,:idno,:purpose,:time_in,:user)')->execute(['tenant_id'=>$tenantId,'name'=>$name,'idno'=>$idNo?:null,'purpose'=>$purpose?:null,'time_in'=>$in,'user'=>$user['id']]); set_flash('Visitor checked in.'); }
+else throw new RuntimeException('Unknown request.'); } catch(RuntimeException $e){set_flash($e->getMessage(),'error');} redirect('visitors.php'); }
+$action=(string)($_GET['action']??'list');$date=preg_match('/^\d{4}-\d{2}-\d{2}$/',(string)($_GET['date']??''))?(string)$_GET['date']:date('Y-m-d');$flash=consume_flash();$tenants=$pdo->query("SELECT id,full_name FROM tenants WHERE status='active' ORDER BY full_name")->fetchAll();
+if($action==='add'){page_start('Log Visitor',$user,'visitors');?>
+<p class="eyebrow">Security Log</p><h1>Log visitor</h1><?php if($flash):?><p class="flash <?=e($flash['type'])?>"><?=e($flash['message'])?></p><?php endif;?>
+<form class="panel payment-form" method="post"><input type="hidden" name="csrf_token" value="<?=csrf_token()?>"><input type="hidden" name="action" value="save_visitor"><label>Visiting tenant *<select name="tenant_id" required><option value="">— Select active tenant —</option><?php foreach($tenants as $tenant):?><option value="<?= (int)$tenant['id']?>"><?=e($tenant['full_name'])?></option><?php endforeach;?></select></label><div class="form-grid"><label>Visitor name *<input name="visitor_name" maxlength="150" required></label><label>Visitor ID number<input name="visitor_id_no" maxlength="100"></label><label>Purpose<input name="purpose" maxlength="255"></label><label>Time in *<input type="datetime-local" name="time_in" value="<?=date('Y-m-d\TH:i')?>" required></label></div><button class="primary" type="submit">Check in visitor</button> <a class="cancel" href="visitors.php">Cancel</a></form>
+<?php page_end();exit;}
+$s=$pdo->prepare("SELECT v.*,t.full_name,u.full_name AS recorded_by_name FROM visitors v INNER JOIN tenants t ON t.id=v.tenant_id LEFT JOIN users u ON u.id=v.recorded_by WHERE DATE(v.time_in)=:date ORDER BY v.time_in DESC");
+$s->execute(['date'=>$date]);
+$visitors=$s->fetchAll();
+$checkedInCount=count(array_filter($visitors,static fn(array $visitor):bool=>$visitor['time_out']===null));
+$checkedOutCount=count($visitors)-$checkedInCount;
+page_start('Visitor Log',$user,'visitors');?>
+
+<section class="visitors-hero">
+  <div><p class="eyebrow">Security Log</p><h1>Visitor Log</h1><p>Monitor guest arrivals, hosts, visit purposes, and check-out status.</p></div>
+  <div class="visitors-hero-actions"><div><span>Selected date</span><strong><?=e(date('F j, Y',strtotime($date)))?></strong></div><a class="button-link" href="visitors.php?action=add"><span aria-hidden="true">+</span> Log visitor</a></div>
+</section>
+
+<section class="visitors-summary-grid" aria-label="Visitor summary">
+  <article><span class="visitor-summary-icon total" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M18 8v6M15 11h6"/></svg></span><div><span>Total visitors</span><strong><?=count($visitors)?></strong></div></article>
+  <article><span class="visitor-summary-icon inside" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16M9 12h6M12 9v6"/></svg></span><div><span>Currently inside</span><strong><?=$checkedInCount?></strong></div></article>
+  <article><span class="visitor-summary-icon out" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></svg></span><div><span>Checked out</span><strong><?=$checkedOutCount?></strong></div></article>
+</section>
+
+<?php if($flash):?><p class="flash <?=e($flash['type'])?>"><?=e($flash['message'])?></p><?php endif;?>
+
+<form class="panel visitors-filter" method="get"><div><p class="eyebrow">Log controls</p><label>Visit date<input type="date" name="date" value="<?=e($date)?>"></label></div><button type="submit">Show visitors <span aria-hidden="true">→</span></button></form>
+
+<section class="panel table-panel visitors-table">
+  <div class="visitors-table-heading"><div><p class="eyebrow">Daily activity</p><h2>Visitor records</h2></div><span class="count-badge"><?=count($visitors)?> record<?=count($visitors)===1?'':'s'?></span></div>
+  <table><thead><tr><th>Visitor</th><th>Visiting</th><th>Purpose</th><th>Time in</th><th>Time out</th><th>Status</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody><?php if(!$visitors):?><tr><td colspan="7"><div class="visitor-empty"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M18 8v6M15 11h6"/></svg></span><div><strong>No visitors logged</strong><p>There are no visitor records for <?=e(date('F j, Y',strtotime($date)))?>.</p></div></div></td></tr><?php else:foreach($visitors as $visitor):preg_match('/^./u',(string)$visitor['visitor_name'],$visitorInitialMatch);$isInside=$visitor['time_out']===null;?><tr><td><div class="visitor-name"><span aria-hidden="true"><?=e(strtoupper($visitorInitialMatch[0]??'?'))?></span><div><strong><?=e($visitor['visitor_name'])?></strong><?php if($visitor['visitor_id_no']):?><small><?=e($visitor['visitor_id_no'])?></small><?php endif;?></div></div></td><td><strong class="visitor-host"><?=e($visitor['full_name'])?></strong></td><td><?= $visitor['purpose']?e($visitor['purpose']):'<span class="not-set">Not provided</span>'?></td><td><span class="visitor-time"><?=e(date('g:i A',strtotime($visitor['time_in'])))?></span></td><td><?= $visitor['time_out']?'<span class="visitor-time">'.e(date('g:i A',strtotime($visitor['time_out']))).'</span>':'<span class="not-set">—</span>'?></td><td><span class="visitor-status <?=$isInside?'inside':'checked-out'?>"><?=$isInside?'On site':'Checked out'?></span></td><td><?php if($isInside):?><form class="checkout visitor-checkout" method="post"><input type="hidden" name="csrf_token" value="<?=csrf_token()?>"><input type="hidden" name="action" value="check_out"><input type="hidden" name="id" value="<?=(int)$visitor['id']?>"><label><span class="visually-hidden">Check-out time</span><input type="datetime-local" name="time_out" value="<?=date('Y-m-d\TH:i')?>" required></label><button type="submit">Check out</button></form><?php else:?><span class="locked-label">Complete</span><?php endif;?></td></tr><?php endforeach;endif;?></tbody></table>
+</section>
+<?php page_end();
