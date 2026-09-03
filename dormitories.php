@@ -41,6 +41,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 set_flash('Dormitory added.');
             }
         } elseif ($action === 'delete_dormitory') {
+          require_role('admin');
             $id = positive_id($_POST['id'] ?? null);
             if ($id === 0) {
                 throw new RuntimeException('Invalid dormitory.');
@@ -66,6 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 set_flash('Room added.');
             }
         } elseif ($action === 'delete_room') {
+          require_role('admin');
             $id = positive_id($_POST['id'] ?? null);
             if ($id === 0) {
                 throw new RuntimeException('Invalid room.');

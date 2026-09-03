@@ -287,14 +287,19 @@ function tenant_import_apply(PDO $pdo, array $rows): int
             if ($dateMovedIn === null) { throw new RuntimeException("Row $rowNumber: date_moved_in is required."); }
             $passportExpiry = tenant_import_date(trim((string) ($row['passport_expiry'] ?? '')), 'passport_expiry', $rowNumber);
             $arcExpiry = tenant_import_date(trim((string) ($row['arc_expiry'] ?? '')), 'arc_expiry', $rowNumber);
+            $contactNumber = tenant_import_text($row, 'contact_no', 11);
+            $emergencyContactNumber = tenant_import_text($row, 'emergency_contact_no', 11);
+            if (($contactNumber !== null && !preg_match('/^[0-9]{1,11}$/', $contactNumber)) || ($emergencyContactNumber !== null && !preg_match('/^[0-9]{1,11}$/', $emergencyContactNumber))) {
+                throw new RuntimeException("Row $rowNumber: contact numbers must contain only digits and be no more than 11 digits.");
+            }
             $insert->execute([
                 'full_name' => $fullName, 'nationality' => normalize_upper(tenant_import_text($row, 'nationality', 80)),
-                'contact_no' => tenant_import_text($row, 'contact_no', 50), 'passport_no' => $passport,
+                'contact_no' => $contactNumber, 'passport_no' => $passport,
                 'passport_expiry' => $passportExpiry, 'arc_no' => $arc, 'arc_expiry' => $arcExpiry,
                 'employee_id' => normalize_upper(tenant_import_text($row, 'employee_id', 80)), 'employer_id' => $employerId,
                 'agency_id' => $agencyId, 'designation' => normalize_upper(tenant_import_text($row, 'designation', 150)),
                 'emergency_contact_name' => normalize_upper(tenant_import_text($row, 'emergency_contact_name', 150)),
-                'emergency_contact_no' => tenant_import_text($row, 'emergency_contact_no', 50),
+                'emergency_contact_no' => $emergencyContactNumber,
                 'additional_comments' => tenant_import_text($row, 'additional_comments', 5000),
                 'room_id' => $room['id'], 'bed_number' => $bedNumber, 'shift_code' => $shift === '' ? null : $shift,
                 'monthly_rent' => number_format((float) $rent, 2, '.', ''), 'date_moved_in' => $dateMovedIn,

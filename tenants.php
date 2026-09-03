@@ -11,6 +11,7 @@ const MANUAL_TENANT_EVENT_TYPES = ['vacation_leave' => 'Vacation Leave', 'sick_l
 
 function tenant_id(mixed $value): int { $id = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]); return $id === false ? 0 : (int) $id; }
 function nullable_post(string $name, int $maximum = 255): ?string { $value = trim((string) ($_POST[$name] ?? '')); if (mb_strlen($value) > $maximum) { throw new RuntimeException("$name is too long."); } return $value === '' ? null : $value; }
+function contact_number(?string $value, string $label): ?string { if ($value === null) { return null; } if (!preg_match('/^[0-9]{1,11}$/', $value)) { throw new RuntimeException("$label must contain only digits and be no more than 11 digits."); } return $value; }
 function valid_date(?string $value, string $label, bool $required = false): ?string { if ($value === null) { if ($required) { throw new RuntimeException("$label is required."); } return null; } $date = DateTime::createFromFormat('Y-m-d', $value); if (!$date || $date->format('Y-m-d') !== $value) { throw new RuntimeException("$label must be a valid date."); } return $value; }
 function entity_name_exists(PDO $pdo, string $table, int $id): bool { $allowed = ['employers', 'agencies', 'rooms']; if (!in_array($table, $allowed, true)) { return false; } $statement = $pdo->prepare("SELECT 1 FROM $table WHERE id = :id"); $statement->execute(['id' => $id]); return (bool) $statement->fetchColumn(); }
 function active_room_count(PDO $pdo, int $roomId, int $exceptTenantId = 0): int { $statement = $pdo->prepare("SELECT COUNT(*) FROM tenants WHERE room_id = :room_id AND status = 'active' AND id != :tenant_id"); $statement->execute(['room_id' => $roomId, 'tenant_id' => $exceptTenantId]); return (int) $statement->fetchColumn(); }
@@ -65,6 +66,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string) ($_POST['action'] ?? '');
     $id = tenant_id($_POST['id'] ?? null);
     try {
+      if ($action === 'delete_tenant') {
+        if (($user['role'] ?? '') !== 'admin') { throw new RuntimeException('Only the Super administrator can permanently delete tenant records.'); }
+        $tenant = tenant_by_id($pdo, $id);
+        if (!$tenant) { throw new RuntimeException('Tenant not found.'); }
+        $pdo->beginTransaction();
+        $pdo->prepare('DELETE FROM tenants WHERE id=:id')->execute(['id' => $id]);
+        $pdo->commit();
+        if (!empty($tenant['photo_path']) && str_starts_with((string) $tenant['photo_path'], 'uploads/tenants/')) {
+          $photoPath = __DIR__ . '/' . ltrim((string) $tenant['photo_path'], '/');
+          if (is_file($photoPath)) { unlink($photoPath); }
+        }
+        set_flash('Tenant record permanently deleted.');
+        redirect('tenants.php');
+      }
         if ($action === 'import_tenants') {
             if (($user['role'] ?? '') !== 'admin') { throw new RuntimeException('Only administrators can import tenant records.'); }
             $imported = tenant_import_apply($pdo, tenant_import_upload($_FILES['tenant_file'] ?? []));
@@ -147,10 +162,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $arcExpiry = valid_date(nullable_post('arc_expiry', 10), 'ARC expiry');
         $photoPath = upload_tenant_photo($_FILES['photo'] ?? []);
         $data = [
-            'full_name' => $fullName, 'nationality' => normalize_upper(nullable_post('nationality', 80)), 'contact_no' => nullable_post('contact_no', 50),
+            'full_name' => $fullName, 'nationality' => normalize_upper(nullable_post('nationality', 80)), 'contact_no' => contact_number(nullable_post('contact_no', 11), 'Contact number'),
             'passport_no' => normalize_upper(nullable_post('passport_no', 80)), 'passport_expiry' => $passportExpiry, 'arc_no' => normalize_upper(nullable_post('arc_no', 80)), 'arc_expiry' => $arcExpiry,
             'employee_id' => normalize_upper(nullable_post('employee_id', 80)), 'employer_id' => $employerId, 'agency_id' => $agencyId, 'designation' => normalize_upper(nullable_post('designation', 150)),
-            'emergency_contact_name' => normalize_upper(nullable_post('emergency_contact_name', 150)), 'emergency_contact_no' => nullable_post('emergency_contact_no', 50), 'additional_comments' => nullable_post('additional_comments', 5000),
+            'emergency_contact_name' => normalize_upper(nullable_post('emergency_contact_name', 150)), 'emergency_contact_no' => contact_number(nullable_post('emergency_contact_no', 11), 'Emergency contact number'), 'additional_comments' => nullable_post('additional_comments', 5000),
             'room_id' => $roomId, 'bed_number' => $bedNumber, 'shift_code' => $shift === '' ? null : $shift, 'monthly_rent' => $rent, 'date_moved_in' => $movedIn,
         ];
         if ($id > 0) {
@@ -165,6 +180,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         redirect('tenants.php');
     } catch (PDOException $exception) {
+      if ($pdo->inTransaction()) { $pdo->rollBack(); }
         set_flash($exception->getCode() === '23000' ? 'Passport or ARC number is already assigned to another tenant.' : 'The tenant could not be saved. Please try again.', 'error');
     } catch (RuntimeException $exception) { set_flash($exception->getMessage(), 'error'); }
     if ($action === 'import_tenants') { redirect('tenants.php?action=import'); }
@@ -227,7 +243,7 @@ if (in_array($action, ['add', 'edit'], true)) {
       <input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="save_tenant"><input type="hidden" name="id" value="<?= (int) ($tenant['id'] ?? 0) ?>">
       <h2>Personal and document information</h2><div class="form-grid">
         <label>Full name *<input name="full_name" maxlength="150" value="<?= e($tenant['full_name'] ?? '') ?>" required></label><label>Nationality<input name="nationality" maxlength="80" value="<?= e($tenant['nationality'] ?? 'Filipino') ?>"></label>
-        <label>Contact number<input name="contact_no" maxlength="50" value="<?= e($tenant['contact_no'] ?? '') ?>"></label><label>Employee ID<input name="employee_id" maxlength="80" value="<?= e($tenant['employee_id'] ?? '') ?>"></label>
+        <label>Contact number<input name="contact_no" type="text" inputmode="numeric" pattern="[0-9]{1,11}" maxlength="11" value="<?= e($tenant['contact_no'] ?? '') ?>"></label><label>Employee ID<input name="employee_id" maxlength="80" value="<?= e($tenant['employee_id'] ?? '') ?>"></label>
         <label>Passport number<input name="passport_no" maxlength="80" value="<?= e($tenant['passport_no'] ?? '') ?>"></label><label>Passport expiry<input type="date" name="passport_expiry" value="<?= e($tenant['passport_expiry'] ?? '') ?>"></label>
         <label>ARC number<input name="arc_no" maxlength="80" value="<?= e($tenant['arc_no'] ?? '') ?>"></label><label>ARC expiry<input type="date" name="arc_expiry" value="<?= e($tenant['arc_expiry'] ?? '') ?>"></label>
         <label>Shift<select name="shift_code"><option value="">— Not set —</option><?php foreach (['DA' => 'Morning Shift A-Pan', 'DB' => 'Morning Shift B-Pan', 'NA' => 'Night Shift A-Pan', 'NB' => 'Night Shift B-Pan'] as $code => $label): ?><option value="<?= $code ?>" <?= ($tenant['shift_code'] ?? '') === $code ? 'selected' : '' ?>><?= $code ?> — <?= e($label) ?></option><?php endforeach; ?></select></label>
@@ -237,7 +253,7 @@ if (in_array($action, ['add', 'edit'], true)) {
         <label>Employer<select name="employer_id"><option value="">— None —</option><?php foreach ($employers as $item): ?><option value="<?= (int) $item['id'] ?>" <?= (int) ($tenant['employer_id'] ?? 0) === (int) $item['id'] ? 'selected' : '' ?>><?= e($item['name']) ?></option><?php endforeach; ?></select></label>
         <label>Agency<select name="agency_id"><option value="">— None —</option><?php foreach ($agencies as $item): ?><option value="<?= (int) $item['id'] ?>" <?= (int) ($tenant['agency_id'] ?? 0) === (int) $item['id'] ? 'selected' : '' ?>><?= e($item['name']) ?></option><?php endforeach; ?></select></label>
         <label>Position/designation<input name="designation" maxlength="150" value="<?= e($tenant['designation'] ?? '') ?>"></label><label>Emergency contact name<input name="emergency_contact_name" maxlength="150" value="<?= e($tenant['emergency_contact_name'] ?? '') ?>"></label>
-        <label>Emergency contact number<input name="emergency_contact_no" maxlength="50" value="<?= e($tenant['emergency_contact_no'] ?? '') ?>"></label>
+        <label>Emergency contact number<input name="emergency_contact_no" type="text" inputmode="numeric" pattern="[0-9]{1,11}" maxlength="11" value="<?= e($tenant['emergency_contact_no'] ?? '') ?>"></label>
       </div>
       <h2>Accommodation</h2><div class="form-grid">
         <label>Dormitory *<select id="dormitory_id" required><option value="">— Select dormitory —</option><?php foreach ($dormitories as $dormitory): ?><option value="<?= (int) $dormitory['id'] ?>" <?= $selectedDormitoryId === (int) $dormitory['id'] ? 'selected' : '' ?>><?= e($dormitory['name']) ?></option><?php endforeach; ?></select></label>
@@ -314,7 +330,7 @@ if ($action === 'view') {
     ?>
     <section class="tenant-profile-hero">
       <div><p class="eyebrow">Tenant Profile</p><div class="tenant-profile-title"><h1><?= e($tenant['full_name']) ?></h1><span class="<?= e($tenant['status']) ?>"><?= e(ucwords(str_replace('_', ' ', $tenant['status']))) ?></span></div><p><?= e(($tenant['dormitory_name'] ?? 'Unassigned') . ($tenant['room_number'] ? ' · Room ' . $tenant['room_number'] : '') . ($tenant['bed_number'] ? ' / Bed ' . $tenant['bed_number'] : '')) ?></p></div>
-      <div class="tenant-profile-actions"><a class="hero-link" href="tenants.php"><span aria-hidden="true">←</span> Back to tenants</a><a class="button-link" href="tenants.php?action=edit&amp;id=<?= (int) $tenant['id'] ?>">Edit profile <span aria-hidden="true">→</span></a></div>
+      <div class="tenant-profile-actions"><a class="hero-link" href="tenants.php"><span aria-hidden="true">←</span> Back to tenants</a><a class="button-link" href="tenants.php?action=edit&amp;id=<?= (int) $tenant['id'] ?>">Edit profile <span aria-hidden="true">→</span></a><?php if (($user['role'] ?? '') === 'admin'): ?><form method="post" onsubmit="return confirm('Permanently delete this tenant record? This cannot be undone.');"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="delete_tenant"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><button class="danger" type="submit">Delete permanently</button></form><?php endif; ?></div>
     </section>
     <section class="profile panel"><div class="photo"><?php if ($tenant['photo_path']): ?><img src="tenant_photo.php?id=<?= (int) $tenant['id'] ?>" alt="Photo of <?= e($tenant['full_name']) ?>"><?php else: ?>No photo<?php endif; ?></div><div><p><strong>Status:</strong> <?= e(ucwords(str_replace('_', ' ', $tenant['status']))) ?></p><p><strong>Room/bed:</strong> <?= e(($tenant['dormitory_name'] ?? 'Unassigned') . ' — ' . ($tenant['room_number'] ?? '') . ' ' . ($tenant['bed_number'] ?? '')) ?></p><p><strong>Shift:</strong> <?= $tenant['shift_code'] ? e(TENANT_EVENT_TYPES[strtolower($tenant['shift_code'])] ?? $tenant['shift_code']) : 'Not set' ?></p><p><strong>Contact:</strong> <?= e($tenant['contact_no']) ?></p><p><strong>Employer:</strong> <?= e($tenant['employer_name']) ?><?= $tenant['designation'] ? ' — ' . e($tenant['designation']) : '' ?></p><p><strong>Agency:</strong> <?= e($tenant['agency_name']) ?></p><p><strong>Passport:</strong> <?= e($tenant['passport_no']) ?><?= $tenant['passport_expiry'] ? ' (expires ' . e($tenant['passport_expiry']) . ')' : '' ?></p><p><strong>ARC:</strong> <?= e($tenant['arc_no']) ?><?= $tenant['arc_expiry'] ? ' (expires ' . e($tenant['arc_expiry']) . ')' : '' ?></p><p><strong>Emergency contact:</strong> <?= e($tenant['emergency_contact_name']) ?> <?= e($tenant['emergency_contact_no']) ?></p><p class="tenant-profile-comments"><strong>Additional comments:</strong> <?= $tenant['additional_comments'] ? nl2br(e($tenant['additional_comments'])) : '<span class="not-set">None</span>' ?></p></div></section>
     <?php if ($tenant['status'] === 'active'): ?><section class="panel"><h2>Move out</h2><form method="post" class="inline-form" onsubmit="return confirm('Move this tenant out? Their bed will become available.');"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="move_out"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><label>Move-out date<input type="date" name="date_moved_out" value="<?= date('Y-m-d') ?>" required></label><button class="danger" type="submit">Move out tenant</button></form></section><?php endif; ?>
@@ -360,6 +376,6 @@ page_start('Tenants', $user, 'tenants');
   </section>
   <section class="panel table-panel tenant-registry-table">
     <div class="tenant-table-heading"><div><p class="eyebrow"><?= $status === 'all' ? 'Full directory' : e(ucwords(str_replace('_', ' ', $status))) ?></p><h2>Tenant records</h2></div><span class="count-badge"><?= count($tenants) ?> result<?= count($tenants) === 1 ? '' : 's' ?></span></div>
-    <table><thead><tr><th>Name</th><th>Employee ID</th><th>Room / bed</th><th>Employer</th><th>Contact</th><th>Moved in</th><th>Status</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody><?php if (!$tenants): ?><tr><td colspan="8"><div class="report-empty">No tenants match the current filters.</div></td></tr><?php else: foreach ($tenants as $tenant): preg_match('/^./u', (string) $tenant['full_name'], $tenantInitialMatch); ?><tr><td><div class="tenant-name-cell"><span aria-hidden="true"><?= e(strtoupper($tenantInitialMatch[0] ?? '?')) ?></span><strong><?= e($tenant['full_name']) ?></strong></div></td><td><span class="employee-id"><?= e($tenant['employee_id'] ?: 'Not set') ?></span></td><td><?php if ($tenant['room_number']): ?><span class="tenant-room"><?= e(($tenant['dormitory_name'] ? $tenant['dormitory_name'] . ' · ' : '') . $tenant['room_number'] . ' / ' . ($tenant['bed_number'] ?? '—')) ?></span><?php else: ?><span class="not-set">Unassigned</span><?php endif; ?></td><td><?= $tenant['employer_name'] ? e($tenant['employer_name']) : '<span class="not-set">Not set</span>' ?></td><td><?= $tenant['contact_no'] ? e($tenant['contact_no']) : '<span class="not-set">Not set</span>' ?></td><td><?= e($tenant['date_moved_in']) ?></td><td><span class="tenant-status <?= e($tenant['status']) ?>"><?= e(ucwords(str_replace('_', ' ', $tenant['status']))) ?></span></td><td><a class="tenant-view-action" href="tenants.php?action=view&amp;id=<?= (int) $tenant['id'] ?>">View <span aria-hidden="true">→</span></a></td></tr><?php endforeach; endif; ?></tbody></table>
+    <table><thead><tr><th>Name</th><th>Employee ID</th><th>Room / bed</th><th>Employer</th><th>Contact</th><th>Moved in</th><th>Status</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody><?php if (!$tenants): ?><tr><td colspan="8"><div class="report-empty">No tenants match the current filters.</div></td></tr><?php else: foreach ($tenants as $tenant): preg_match('/^./u', (string) $tenant['full_name'], $tenantInitialMatch); ?><tr><td><div class="tenant-name-cell"><span aria-hidden="true"><?= e(strtoupper($tenantInitialMatch[0] ?? '?')) ?></span><strong><?= e($tenant['full_name']) ?></strong></div></td><td><span class="employee-id"><?= e($tenant['employee_id'] ?: 'Not set') ?></span></td><td><?php if ($tenant['room_number']): ?><span class="tenant-room"><?= e(($tenant['dormitory_name'] ? $tenant['dormitory_name'] . ' · ' : '') . $tenant['room_number'] . ' / ' . ($tenant['bed_number'] ?? '—')) ?></span><?php else: ?><span class="not-set">Unassigned</span><?php endif; ?></td><td><?= $tenant['employer_name'] ? e($tenant['employer_name']) : '<span class="not-set">Not set</span>' ?></td><td><?= $tenant['contact_no'] ? e($tenant['contact_no']) : '<span class="not-set">Not set</span>' ?></td><td><?= e($tenant['date_moved_in']) ?></td><td><span class="tenant-status <?= e($tenant['status']) ?>"><?= e(ucwords(str_replace('_', ' ', $tenant['status']))) ?></span></td><td><a class="tenant-view-action" href="tenants.php?action=view&amp;id=<?= (int) $tenant['id'] ?>">View <span aria-hidden="true">→</span></a><?php if (($user['role'] ?? '') === 'admin'): ?><form method="post" class="inline-delete" onsubmit="return confirm('Permanently delete this tenant record? This cannot be undone.');"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="delete_tenant"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><button class="table-action danger-action" type="submit">Delete</button></form><?php endif; ?></td></tr><?php endforeach; endif; ?></tbody></table>
   </section>
 <?php page_end();

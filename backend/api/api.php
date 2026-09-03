@@ -166,6 +166,17 @@ function sanitize_payload(string $resource, array $payload): array {
     return $clean;
 }
 
+function validate_contact_numbers(array &$data): void {
+    foreach (['contact_no' => 'Contact number', 'emergency_contact_no' => 'Emergency contact number'] as $field => $label) {
+        if (!array_key_exists($field, $data) || $data[$field] === null || $data[$field] === '') {
+            continue;
+        }
+        if (!preg_match('/^[0-9]{1,11}$/', (string) $data[$field])) {
+            error_response($label . ' must contain only digits and be no more than 11 digits.', 422);
+        }
+    }
+}
+
 function make_id(string $prefix): string {
     return $prefix . '_' . bin2hex(random_bytes(4));
 }
@@ -195,6 +206,9 @@ function fetch_one(string $resource, string $recordId): ?array {
 
 function create_record(string $resource, array $payload): array {
     $data = sanitize_payload($resource, $payload);
+    if ($resource === 'tenants') {
+        validate_contact_numbers($data);
+    }
 
     if ($resource === 'settings') {
         return upsert_settings($data);
@@ -240,6 +254,9 @@ function update_record(string $resource, string $recordId, array $payload): arra
     }
 
     $data = sanitize_payload($resource, $payload);
+    if ($resource === 'tenants') {
+        validate_contact_numbers($data);
+    }
 
     if (!$data) {
         return $existing;
@@ -766,6 +783,7 @@ function route(): never {
             }
 
             if ($method === 'DELETE' && $recordId) {
+                require_admin();
                 delete_record($resource, $recordId);
                 json_response(['success' => true]);
             }
