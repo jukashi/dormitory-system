@@ -13,4 +13,4 @@ ServerSignature Off
 </FilesMatch>
 
 RewriteEngine On
-RewriteRule ^(?:app|migrations|backend)(?:/|$) - [F,L,NC]
+RewriteRule ^(?:app|migrations|backend|uploads/tenants)(?:/|$) - [F,L,NC]

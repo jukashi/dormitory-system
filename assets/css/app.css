@@ -231,3 +231,26 @@ button { border:0; border-radius:5px; padding:10px 14px; font:inherit; font-weig
 @media (max-width:720px) { .login-page { display:block; min-height:100vh; padding:18px; overflow-y:auto; } .login-shell { display:block; min-height:0; max-width:480px; margin:0 auto; border-radius:17px; } .login-brand-panel { display:none; } .login-card { padding:31px 25px 27px; } .login-mobile-mark { display:flex; align-items:center; gap:9px; margin-bottom:31px; color:#173f59; font-size:14px; font-weight:bold; } .login-mobile-mark > span { width:36px; height:36px; } .login-heading { padding-left:0; } .login-welcome-icon { display:none; } .login-heading h1 { font-size:29px; } .login-form { margin-top:25px; } .login-security { margin-top:19px; } }
 @media (max-height:760px) and (min-width:721px) { .login-page { padding:22px; } .login-shell { min-height:600px; } .login-brand-copy { margin-top:38px; } .login-card { padding-top:36px; padding-bottom:36px; } }
 @media (max-width:720px) { .tenant-profile-hero { align-items:flex-start; flex-direction:column; padding:23px 21px; } .tenant-profile-title h1 { font-size:27px; } .tenant-profile-actions { align-items:stretch; flex-direction:column-reverse; width:100%; } .tenant-registry-actions { align-items:stretch; flex-direction:column; width:100%; } .tenant-registry-actions .button-link,.tenant-registry-actions .hero-link { justify-content:center; } .tenant-import-form,.tenant-import-guide { grid-template-columns:1fr; } }
+
+/* Mobile navigation remains fully usable instead of disappearing below 720px. */
+@media (max-width:720px) {
+  .sidebar { gap:12px; padding:14px 16px; }
+  .sidebar .brand { align-items:flex-start; margin:0; }
+  .sidebar .brand-logo { width:auto; max-width:150px; }
+  .sidebar nav { display:flex; gap:7px; margin:0 -2px; padding:2px 2px 8px; overflow-x:auto; overscroll-behavior-inline:contain; scrollbar-width:thin; }
+  .sidebar nav a { flex:0 0 auto; grid-template-columns:20px auto; min-height:40px; padding:8px 11px; border-color:#ffffff1c; background:#ffffff0a; }
+  .sidebar nav a .nav-chevron { display:none; }
+  .sidebar nav a:hover { transform:none; }
+  .account { grid-template-columns:32px minmax(0,1fr) auto; margin:0; padding:11px 0 0; }
+  .account-avatar { width:32px; height:32px; }
+  .account form { grid-column:auto; }
+  .account button { width:auto; margin:0; }
+  .account button span { display:none; }
+}
+
+textarea:focus { outline:2px solid var(--accent); border-color:var(--accent); }
+a:focus-visible,button:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+
+@media (prefers-reduced-motion:reduce) {
+  *,*::before,*::after { scroll-behavior:auto !important; transition-duration:.01ms !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; }
+}

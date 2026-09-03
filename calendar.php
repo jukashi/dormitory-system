@@ -11,7 +11,7 @@ const EVENT_TYPES = [
     'na' => 'NA — Night Shift A-PAN', 'nb' => 'NB — Night Shift B-PAN',
     'work_shift' => 'Work Shift (legacy)', 'day_off' => 'Day Off',
     'vacation_leave' => 'VL — Vacation Leave', 'sick_leave' => 'SL — Sick Leave',
-    'leave' => 'Leave (legacy)', 'flight' => 'Flight', 'appointment' => 'Appointment', 'other' => 'Other',
+    'leave' => 'Leave (legacy)', 'flight' => 'Flight', 'appointment' => 'Appointment', 'emergency' => 'Emergency', 'other' => 'Other',
 ];
 const SHIFT_TYPES = ['DA' => 'DA — Day Shift A-PAN', 'DB' => 'DB — Day Shift B-PAN', 'NA' => 'NA — Night Shift A-PAN', 'NB' => 'NB — Night Shift B-PAN'];
 const STAFF_EVENT_TYPES = ['work_schedule' => 'Work Schedule', 'day_off' => 'Day Off', 'leave' => 'Leave', 'meeting' => 'Meeting', 'training' => 'Training', 'other' => 'Other'];
@@ -49,6 +49,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $shift = (string) ($_POST['event_type'] ?? '');
             $file = $_FILES['csv_file'] ?? [];
             if (!isset(SHIFT_TYPES[$shift]) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || ($file['size'] ?? 0) > 512 * 1024) { throw new RuntimeException('Choose a shift type and CSV file up to 512 KB.'); }
+            if (!is_uploaded_file((string) ($file['tmp_name'] ?? ''))) { throw new RuntimeException('The uploaded CSV file is invalid.'); }
+            $mime = (new finfo(FILEINFO_MIME_TYPE))->file((string) $file['tmp_name']);
+            if (!in_array($mime, ['text/plain', 'text/csv', 'application/csv', 'application/vnd.ms-excel', 'application/octet-stream'], true)) { throw new RuntimeException('The uploaded file is not a valid CSV document.'); }
             $handle = fopen($file['tmp_name'], 'rb');
             if (!$handle) { throw new RuntimeException('CSV file could not be read.'); }
             $header = fgetcsv($handle);
@@ -76,6 +79,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $upsert->execute(['shift_code'=>$shift,'schedule_date'=>$date,'is_work_day'=>$isWorkDay ? 1 : 0,'source_value'=>$workValue,'created_by'=>$user['id']]);
                     $saved++; $isWorkDay ? $workDays++ : $daysOff++;
                 }
+                if ($saved === 0) { throw new RuntimeException('No valid schedule rows were found in the CSV file.'); }
                 $pdo->commit();
             } catch (Throwable $exception) { $pdo->rollBack(); throw $exception; } finally { fclose($handle); }
             set_flash("CSV import complete: $saved shift dates saved; $workDays work dates and $daysOff non-working dates processed. Tenant calendars update automatically from each tenant's current shift.");
@@ -120,6 +124,9 @@ if ($selectedShift === 'ADMIN') {
     $statement = $pdo->prepare('SELECT shift_code,schedule_date,is_work_day,source_value FROM shift_schedule_entries WHERE shift_code=:shift_code AND schedule_date BETWEEN :first AND :last ORDER BY schedule_date');
     $statement->execute(['shift_code'=>$selectedShift,'first'=>$first->format('Y-m-d'),'last'=>$last->format('Y-m-d')]);
     foreach ($statement->fetchAll() as $entry) { $events[] = ['id'=>null,'event_type'=>$entry['is_work_day'] ? strtolower($entry['shift_code']) : 'day_off','start_date'=>$entry['schedule_date'],'end_date'=>null,'full_name'=>$entry['source_value'],'notes'=>'','is_shift_entry'=>true]; }
+    $statement = $pdo->prepare("SELECT s.id,s.event_type,s.start_date,s.end_date,s.notes,t.full_name FROM schedules s INNER JOIN tenants t ON t.id=s.tenant_id WHERE t.status='active' AND t.shift_code=:shift_code AND s.start_date<=:last AND (s.end_date IS NULL OR s.end_date>=:first) ORDER BY s.start_date,t.full_name");
+    $statement->execute(['shift_code'=>$selectedShift,'first'=>$first->format('Y-m-d'),'last'=>$last->format('Y-m-d')]);
+    foreach ($statement->fetchAll() as $tenantEvent) { $tenantEvent['is_tenant_event'] = true; $events[] = $tenantEvent; }
 }
 $byDay = [];
 foreach ($events as $event) { $cursor = new DateTime(max($event['start_date'], $first->format('Y-m-d'))); $end = new DateTime(min($event['end_date'] ?: $event['start_date'], $last->format('Y-m-d'))); while ($cursor <= $end) { $byDay[$cursor->format('j')][] = $event; $cursor->modify('+1 day'); } }

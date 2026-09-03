@@ -19,8 +19,10 @@ header('Cache-Control: no-store, private');
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
     session_name('ofw_dormitory_session');
+    $scriptDirectory = str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/')));
+    $cookiePath = rtrim($scriptDirectory, '/') . '/';
     session_set_cookie_params([
-        'path' => '/',
+        'path' => $cookiePath === '//' ? '/' : $cookiePath,
         'httponly' => true,
         'samesite' => 'Lax',
         'secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
@@ -239,7 +241,10 @@ function user_permissions(): array
 {
     static $permissions = null;
     $user = current_user();
-    if ($user === null || $user['role'] === 'admin') {
+    if ($user === null) {
+        return [];
+    }
+    if ($user['role'] === 'admin') {
         return array_keys(permission_catalog());
     }
     if (is_array($permissions)) {

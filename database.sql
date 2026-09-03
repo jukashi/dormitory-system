@@ -103,7 +103,10 @@ CREATE TABLE tenants (
   CONSTRAINT fk_tenants_employer FOREIGN KEY (employer_id) REFERENCES employers(id) ON DELETE SET NULL,
   CONSTRAINT fk_tenants_agency FOREIGN KEY (agency_id) REFERENCES agencies(id) ON DELETE SET NULL,
   CONSTRAINT fk_tenants_room FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL,
-  CONSTRAINT uq_active_room_bed UNIQUE (active_room_id, active_bed_number)
+  CONSTRAINT chk_tenant_move_dates CHECK (date_moved_out IS NULL OR date_moved_out >= date_moved_in),
+  CONSTRAINT uq_active_room_bed UNIQUE (active_room_id, active_bed_number),
+  INDEX idx_tenants_status_room (status, room_id),
+  INDEX idx_tenants_shift_status (shift_code, status)
 ) ENGINE=InnoDB;
 
 CREATE TABLE payments (
@@ -121,7 +124,8 @@ CREATE TABLE payments (
   CONSTRAINT fk_payments_user FOREIGN KEY (recorded_by) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT chk_payment_amount CHECK (amount > 0),
   INDEX idx_payments_month (payment_month),
-  INDEX idx_payments_tenant (tenant_id)
+  INDEX idx_payments_tenant (tenant_id),
+  INDEX idx_payments_tenant_month (tenant_id, payment_month)
 ) ENGINE=InnoDB;
 
 CREATE TABLE visitors (
@@ -136,6 +140,7 @@ CREATE TABLE visitors (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_visitors_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE RESTRICT,
   CONSTRAINT fk_visitors_user FOREIGN KEY (recorded_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT chk_visitor_times CHECK (time_out IS NULL OR time_out >= time_in),
   INDEX idx_visitors_time_in (time_in)
 ) ENGINE=InnoDB;
 
@@ -150,7 +155,8 @@ CREATE TABLE maintenance_requests (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_maintenance_room FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL,
   CONSTRAINT fk_maintenance_user FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
-  INDEX idx_maintenance_status (status)
+  INDEX idx_maintenance_status (status),
+  INDEX idx_maintenance_status_date (status, date_reported)
 ) ENGINE=InnoDB;
 
 CREATE TABLE schedules (
@@ -164,7 +170,9 @@ CREATE TABLE schedules (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_schedules_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
   CONSTRAINT fk_schedules_user FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-  INDEX idx_schedules_dates (start_date, end_date)
+  CONSTRAINT chk_schedule_dates CHECK (end_date IS NULL OR end_date >= start_date),
+  INDEX idx_schedules_dates (start_date, end_date),
+  INDEX idx_schedules_tenant_dates (tenant_id, start_date, end_date)
 ) ENGINE=InnoDB;
 
 CREATE TABLE schedule_comments (
@@ -202,6 +210,7 @@ CREATE TABLE staff_events (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_staff_events_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_staff_events_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT chk_staff_event_dates CHECK (end_date IS NULL OR end_date >= start_date),
   INDEX idx_staff_events_dates (start_date, end_date)
 ) ENGINE=InnoDB;
 

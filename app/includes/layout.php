@@ -11,6 +11,7 @@ function page_start(string $title, array $user, string $activePage = 'dashboard'
     $role = e(ucfirst($user['role']));
     $safeTitle = e($title);
     $csrfToken = csrf_token();
+    $homePage = e(permitted_landing_page($user));
     $stylesheetVersion = (string) filemtime(__DIR__ . '/../../assets/css/app.css');
     $companyLogo = app_setting('company_logo_path');
     $logoMarkup = $companyLogo !== null && $companyLogo !== ''
@@ -61,7 +62,7 @@ function page_start(string $title, array $user, string $activePage = 'dashboard'
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="dashboard.php">{$logoMarkup}<span class="brand-text"><small>Dormitory System</small></span></a>
+    <a class="brand" href="{$homePage}">{$logoMarkup}<span class="brand-text"><small>Dormitory System</small></span></a>
     <nav aria-label="Main navigation">
       {$navigation}
     </nav>
@@ -70,7 +71,7 @@ function page_start(string $title, array $user, string $activePage = 'dashboard'
       <div class="account-details"><strong>{$name}</strong><span>{$role}</span></div>
       <form action="logout.php" method="post">
         <input type="hidden" name="csrf_token" value="{$csrfToken}">
-        <button type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></svg><span>Log out</span></button>
+        <button type="submit" aria-label="Log out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></svg><span>Log out</span></button>
       </form>
     </div>
   </aside>

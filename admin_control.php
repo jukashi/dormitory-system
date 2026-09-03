@@ -21,6 +21,7 @@ function selected_permissions(array $permissions): array
     if (!is_array($selected)) {
         return [];
     }
+    $selected = array_filter($selected, static fn (mixed $value): bool => is_string($value));
     return array_values(array_intersect(array_keys($permissions), $selected));
 }
 
@@ -36,6 +37,9 @@ function upload_company_logo(array $file): string
 {
     if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || ($file['size'] ?? 0) > 1024 * 1024) {
         throw new RuntimeException('Choose an image logo no larger than 1 MB.');
+    }
+    if (!is_uploaded_file((string) ($file['tmp_name'] ?? ''))) {
+        throw new RuntimeException('The uploaded logo is invalid.');
     }
     $mime = (new finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']);
     $extensions = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
@@ -57,6 +61,17 @@ function upload_company_logo(array $file): string
     return 'uploads/company/' . basename($path);
 }
 
+function delete_company_logo(?string $storedPath): void
+{
+    if ($storedPath === null || !preg_match('#^uploads/company/logo-[a-f0-9]{24}\.(?:jpg|png|webp)$#', $storedPath)) {
+        return;
+    }
+    $path = __DIR__ . '/' . $storedPath;
+    if (is_file($path) && !unlink($path)) {
+        error_log('Unable to remove obsolete company logo: ' . basename($path));
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_valid_csrf();
     $action = (string) ($_POST['action'] ?? '');
@@ -70,18 +85,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     if (in_array($action, ['save_company_logo', 'remove_company_logo'], true)) {
+        $previousLogoPath = app_setting('company_logo_path');
+        $newLogoPath = null;
         try {
             if ($action === 'save_company_logo') {
-                $logoPath = upload_company_logo($_FILES['company_logo'] ?? []);
-                $pdo->prepare('INSERT INTO settings (setting_key,setting_value) VALUES (\'company_logo_path\',:setting_value) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)')->execute(['setting_value' => $logoPath]);
+                $newLogoPath = upload_company_logo($_FILES['company_logo'] ?? []);
+                $pdo->prepare('INSERT INTO settings (setting_key,setting_value) VALUES (\'company_logo_path\',:setting_value) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)')->execute(['setting_value' => $newLogoPath]);
+                delete_company_logo($previousLogoPath);
                 set_flash('Company logo updated.');
             } else {
                 $pdo->prepare('INSERT INTO settings (setting_key,setting_value) VALUES (\'company_logo_path\',NULL) ON DUPLICATE KEY UPDATE setting_value=NULL')->execute();
+                delete_company_logo($previousLogoPath);
                 set_flash('Company logo removed.');
             }
         } catch (RuntimeException $exception) {
             set_flash($exception->getMessage(), 'error');
         } catch (PDOException $exception) {
+            delete_company_logo($newLogoPath);
             set_flash('The company logo setting could not be saved.', 'error');
         }
         redirect('admin_control.php');

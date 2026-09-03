@@ -23,17 +23,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($password !== $confirmPassword) {
         $error = 'The passwords do not match.';
     } else {
-        $statement = db()->prepare('INSERT INTO users (full_name, username, password_hash, role, status) VALUES (:full_name, :username, :password_hash, \'admin\', \'active\')');
+        $pdo = db();
+        $setupLock = (int) $pdo->query("SELECT GET_LOCK('ofw_dormitory_initial_admin', 5)")->fetchColumn() === 1;
+        if (!$setupLock) {
+            $error = 'Initial setup is already in progress. Try again in a moment.';
+        }
         try {
-            $statement->execute([
-                'full_name' => $fullName,
-                'username' => $username,
-                'password_hash' => password_hash($password, PASSWORD_DEFAULT),
-            ]);
-            login_user(['id' => (int) db()->lastInsertId(), 'full_name' => $fullName, 'username' => $username, 'role' => 'admin']);
-            redirect('dashboard.php');
+            if ($setupLock) {
+                $adminExists = (int) $pdo->query("SELECT COUNT(*) FROM users WHERE role = 'admin'")->fetchColumn() > 0;
+                if ($adminExists) {
+                    $error = 'The administrator account has already been created. Log in instead.';
+                } else {
+                    $statement = $pdo->prepare('INSERT INTO users (full_name, username, password_hash, role, status) VALUES (:full_name, :username, :password_hash, \'admin\', \'active\')');
+                    $statement->execute([
+                        'full_name' => $fullName,
+                        'username' => $username,
+                        'password_hash' => password_hash($password, PASSWORD_DEFAULT),
+                    ]);
+                    $userId = (int) $pdo->lastInsertId();
+                }
+            }
         } catch (PDOException $exception) {
             $error = 'That username is already in use. Choose another one.';
+        } finally {
+            if ($setupLock) { $pdo->query("SELECT RELEASE_LOCK('ofw_dormitory_initial_admin')"); }
+        }
+        if (isset($userId)) {
+            login_user(['id' => $userId, 'full_name' => $fullName, 'username' => $username, 'role' => 'admin']);
+            redirect('dashboard.php');
         }
     }
 }

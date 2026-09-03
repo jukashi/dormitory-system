@@ -9,8 +9,6 @@ $pdo = db();
 function payment_id(mixed $value): int { $id = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]); return $id === false ? 0 : (int) $id; }
 function valid_month(mixed $value): ?string { $month = (string) $value; if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month)) { return null; } return $month . '-01'; }
 function valid_payment_date(mixed $value): ?string { $date = (string) $value; $check = DateTime::createFromFormat('Y-m-d', $date); return $check && $check->format('Y-m-d') === $date ? $date : null; }
-function active_tenant_exists(PDO $pdo, int $id): bool { $statement = $pdo->prepare("SELECT 1 FROM tenants WHERE id=:id AND status='active'"); $statement->execute(['id' => $id]); return (bool) $statement->fetchColumn(); }
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_valid_csrf();
     try {
@@ -23,9 +21,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $reference = normalize_upper((string) ($_POST['reference_no'] ?? '')) ?? '';
         $notes = trim((string) ($_POST['notes'] ?? ''));
         $allowDuplicate = isset($_POST['allow_duplicate']) && $user['role'] === 'admin';
-        if (!$tenantId || !active_tenant_exists($pdo, $tenantId) || $amount === false || $amount <= 0 || $amount > 99999999.99 || !$paymentMonth || !$paymentDate) { throw new RuntimeException('Choose an active tenant and enter a valid amount, payment month, and payment date.'); }
+        if (!$tenantId || $amount === false || $amount <= 0 || $amount > 99999999.99 || !$paymentMonth || !$paymentDate) { throw new RuntimeException('Choose an active tenant and enter a valid amount, payment month, and payment date.'); }
         if (!in_array($method, ['cash', 'bank_transfer', 'payroll_deduction', 'other'], true)) { throw new RuntimeException('Select a valid payment method.'); }
         if (mb_strlen($reference) > 100 || mb_strlen($notes) > 5000) { throw new RuntimeException('Reference or notes are too long.'); }
+        $pdo->beginTransaction();
+        $tenantLock = $pdo->prepare("SELECT id FROM tenants WHERE id=:id AND status='active' FOR UPDATE");
+        $tenantLock->execute(['id' => $tenantId]);
+        if (!$tenantLock->fetchColumn()) { throw new RuntimeException('Choose an active tenant and enter a valid amount, payment month, and payment date.'); }
         if (!$allowDuplicate) {
             $duplicate = $pdo->prepare('SELECT COUNT(*) FROM payments WHERE tenant_id=:tenant_id AND payment_month=:payment_month');
             $duplicate->execute(['tenant_id' => $tenantId, 'payment_month' => $paymentMonth]);
@@ -33,9 +35,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $statement = $pdo->prepare('INSERT INTO payments (tenant_id,amount,payment_month,payment_date,payment_method,reference_no,notes,recorded_by) VALUES (:tenant_id,:amount,:payment_month,:payment_date,:payment_method,:reference_no,:notes,:recorded_by)');
         $statement->execute(['tenant_id' => $tenantId, 'amount' => $amount, 'payment_month' => $paymentMonth, 'payment_date' => $paymentDate, 'payment_method' => $method, 'reference_no' => $reference !== '' ? $reference : null, 'notes' => $notes !== '' ? $notes : null, 'recorded_by' => $user['id']]);
+        $pdo->commit();
         set_flash('Payment recorded.');
         redirect('payments.php?month=' . substr($paymentMonth, 0, 7));
-    } catch (RuntimeException $exception) { set_flash($exception->getMessage(), 'error'); redirect('payments.php?action=add'); }
+    } catch (RuntimeException $exception) { if ($pdo->inTransaction()) { $pdo->rollBack(); } set_flash($exception->getMessage(), 'error'); redirect('payments.php?action=add'); }
+      catch (PDOException $exception) { if ($pdo->inTransaction()) { $pdo->rollBack(); } error_log('Payment operation failed: ' . $exception->getMessage()); set_flash('The payment could not be recorded. Please try again.', 'error'); redirect('payments.php?action=add'); }
 }
 
 $action = (string) ($_GET['action'] ?? 'list');

@@ -58,8 +58,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new RuntimeException('Select a dormitory, enter a room number, and set capacity between 1 and 99.');
             }
             if ($id > 0) {
+                $pdo->beginTransaction();
+                $roomLock = $pdo->prepare('SELECT id FROM rooms WHERE id = :id FOR UPDATE');
+                $roomLock->execute(['id' => $id]);
+                if (!$roomLock->fetchColumn()) {
+                    throw new RuntimeException('Room not found.');
+                }
+                $occupancy = $pdo->prepare("SELECT COUNT(*) FROM tenants WHERE room_id = :id AND status = 'active'");
+                $occupancy->execute(['id' => $id]);
+                if ((int) $occupancy->fetchColumn() > (int) $capacity) {
+                    throw new RuntimeException('Room capacity cannot be lower than its current active occupancy.');
+                }
                 $statement = $pdo->prepare('UPDATE rooms SET dormitory_id = :dormitory_id, room_number = :room_number, capacity = :capacity WHERE id = :id');
                 $statement->execute(['dormitory_id' => $dormitoryId, 'room_number' => $roomNumber, 'capacity' => $capacity, 'id' => $id]);
+                $pdo->commit();
                 set_flash('Room updated.');
             } else {
                 $statement = $pdo->prepare('INSERT INTO rooms (dormitory_id, room_number, capacity) VALUES (:dormitory_id, :room_number, :capacity)');
@@ -79,12 +91,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new RuntimeException('Unknown request.');
         }
     } catch (PDOException $exception) {
+        if ($pdo->inTransaction()) { $pdo->rollBack(); }
         if ($exception->getCode() === '23000') {
             set_flash('This item cannot be deleted because it is being used, or the room number already exists in this dormitory.', 'error');
         } else {
             set_flash('The change could not be saved. Please try again.', 'error');
         }
     } catch (RuntimeException $exception) {
+        if ($pdo->inTransaction()) { $pdo->rollBack(); }
         set_flash($exception->getMessage(), 'error');
     }
 

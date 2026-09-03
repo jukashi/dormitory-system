@@ -36,6 +36,7 @@ function consume_tenant_form(int $tenantId): array {
 function upload_tenant_photo(array $file): ?string {
     if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) { return null; }
     if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || ($file['size'] ?? 0) > 2 * 1024 * 1024) { throw new RuntimeException('Photo upload failed. Use an image no larger than 2 MB.'); }
+    if (!is_uploaded_file((string) ($file['tmp_name'] ?? ''))) { throw new RuntimeException('The uploaded photo is invalid.'); }
     $mime = (new finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']);
     $extensions = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
     if (!isset($extensions[$mime])) { throw new RuntimeException('Photo must be a JPG, PNG, or WebP image.'); }
@@ -46,6 +47,11 @@ function upload_tenant_photo(array $file): ?string {
     $filename = bin2hex(random_bytes(16)) . '.' . $extensions[$mime];
     if (!move_uploaded_file($file['tmp_name'], $directory . '/' . $filename)) { throw new RuntimeException('Photo could not be saved.'); }
     return 'uploads/tenants/' . $filename;
+}
+function delete_tenant_photo(?string $storedPath): void {
+    if ($storedPath === null || !preg_match('#^uploads/tenants/[a-f0-9]{32}\.(?:jpg|png|webp)$#', $storedPath)) { return; }
+    $path = __DIR__ . '/' . $storedPath;
+    if (is_file($path) && !unlink($path)) { error_log('Unable to remove obsolete tenant photo: ' . basename($path)); }
 }
 function tenant_by_id(PDO $pdo, int $id): ?array { $statement = $pdo->prepare("SELECT t.*, r.room_number, d.name AS dormitory_name, e.name AS employer_name, a.name AS agency_name FROM tenants t LEFT JOIN rooms r ON r.id=t.room_id LEFT JOIN dormitories d ON d.id=r.dormitory_id LEFT JOIN employers e ON e.id=t.employer_id LEFT JOIN agencies a ON a.id=t.agency_id WHERE t.id=:id"); $statement->execute(['id' => $id]); return $statement->fetch() ?: null; }
 
@@ -65,6 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_valid_csrf();
     $action = (string) ($_POST['action'] ?? '');
     $id = tenant_id($_POST['id'] ?? null);
+    $photoPath = null;
     try {
       if ($action === 'delete_tenant') {
         if (($user['role'] ?? '') !== 'admin') { throw new RuntimeException('Only the Super administrator can permanently delete tenant records.'); }
@@ -90,6 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $tenant = tenant_by_id($pdo, $id);
             if (!$tenant || $tenant['status'] !== 'active') { throw new RuntimeException('Only active tenants can be moved out.'); }
             $movedOut = valid_date(nullable_post('date_moved_out', 10), 'Move-out date', true);
+            if ($movedOut < $tenant['date_moved_in'] || $movedOut > date('Y-m-d')) { throw new RuntimeException('Move-out date must be between the tenant\'s move-in date and today.'); }
             $statement = $pdo->prepare("UPDATE tenants SET status='moved_out', date_moved_out=:date_moved_out WHERE id=:id");
             $statement->execute(['date_moved_out' => $movedOut, 'id' => $id]);
             set_flash('Tenant moved out. Their bed is now available.');
@@ -102,10 +110,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $movedIn = valid_date(nullable_post('date_moved_in', 10), 'Move-in date', true);
             if (!$tenant || $tenant['status'] !== 'moved_out') { throw new RuntimeException('Only moved-out tenants can be reactivated.'); }
             if (!$roomId || !entity_name_exists($pdo, 'rooms', $roomId) || $bedNumber === null) { throw new RuntimeException('Choose a room and enter a bed number.'); }
+            $pdo->beginTransaction();
+            $lock = $pdo->prepare('SELECT id FROM rooms WHERE id=:id FOR UPDATE');
+            $lock->execute(['id' => $roomId]);
             if (active_room_count($pdo, $roomId) >= room_capacity($pdo, $roomId)) { throw new RuntimeException('This room is already at full capacity.'); }
             if (active_bed_taken($pdo, $roomId, $bedNumber)) { throw new RuntimeException('That bed is already assigned to an active tenant in this room.'); }
             $statement = $pdo->prepare("UPDATE tenants SET status='active', room_id=:room_id, bed_number=:bed_number, date_moved_in=:date_moved_in, date_moved_out=NULL WHERE id=:id");
             $statement->execute(['room_id' => $roomId, 'bed_number' => $bedNumber, 'date_moved_in' => $movedIn, 'id' => $id]);
+            $pdo->commit();
             set_flash('Tenant reactivated.');
             redirect('tenants.php?action=view&id=' . $id);
         }
@@ -152,15 +164,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (($employerId && !entity_name_exists($pdo, 'employers', $employerId)) || ($agencyId && !entity_name_exists($pdo, 'agencies', $agencyId))) { throw new RuntimeException('Select a valid employer and agency.'); }
         $shift = (string) ($_POST['shift_code'] ?? '');
         if (!in_array($shift, ['', 'DA', 'DB', 'NA', 'NB'], true)) { throw new RuntimeException('Select a valid shift.'); }
+        $photoPath = upload_tenant_photo($_FILES['photo'] ?? []);
         $existingTenant = $id > 0 ? tenant_by_id($pdo, $id) : null;
         if ($id > 0 && !$existingTenant) { throw new RuntimeException('Tenant not found.'); }
         if ($existingTenant === null || $existingTenant['status'] === 'active') {
+            $pdo->beginTransaction();
+            $lock = $pdo->prepare('SELECT id FROM rooms WHERE id=:id FOR UPDATE');
+            $lock->execute(['id' => $roomId]);
             if (active_room_count($pdo, $roomId, $id) >= room_capacity($pdo, $roomId)) { throw new RuntimeException('This room is already at full capacity.'); }
             if (active_bed_taken($pdo, $roomId, $bedNumber, $id)) { throw new RuntimeException('That bed is already assigned to an active tenant in this room.'); }
         }
         $passportExpiry = valid_date(nullable_post('passport_expiry', 10), 'Passport expiry');
         $arcExpiry = valid_date(nullable_post('arc_expiry', 10), 'ARC expiry');
-        $photoPath = upload_tenant_photo($_FILES['photo'] ?? []);
         $data = [
             'full_name' => $fullName, 'nationality' => normalize_upper(nullable_post('nationality', 80)), 'contact_no' => contact_number(nullable_post('contact_no', 11), 'Contact number'),
             'passport_no' => normalize_upper(nullable_post('passport_no', 80)), 'passport_expiry' => $passportExpiry, 'arc_no' => normalize_upper(nullable_post('arc_no', 80)), 'arc_expiry' => $arcExpiry,
@@ -172,17 +187,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $photoSql = $photoPath ? ', photo_path=:photo_path' : '';
             $sql = "UPDATE tenants SET full_name=:full_name,nationality=:nationality,contact_no=:contact_no,passport_no=:passport_no,passport_expiry=:passport_expiry,arc_no=:arc_no,arc_expiry=:arc_expiry,employee_id=:employee_id,employer_id=:employer_id,agency_id=:agency_id,designation=:designation,emergency_contact_name=:emergency_contact_name,emergency_contact_no=:emergency_contact_no,additional_comments=:additional_comments,room_id=:room_id,bed_number=:bed_number,shift_code=:shift_code,monthly_rent=:monthly_rent,date_moved_in=:date_moved_in$photoSql WHERE id=:id";
             if ($photoPath) { $data['photo_path'] = $photoPath; } $data['id'] = $id;
-            $pdo->prepare($sql)->execute($data); set_flash('Tenant updated.');
+            $pdo->prepare($sql)->execute($data);
+            if ($pdo->inTransaction()) { $pdo->commit(); }
+            if ($photoPath && !empty($existingTenant['photo_path'])) { delete_tenant_photo((string) $existingTenant['photo_path']); }
+            set_flash('Tenant updated.');
         } else {
             $data['photo_path'] = $photoPath;
             $sql = 'INSERT INTO tenants (full_name,nationality,contact_no,passport_no,passport_expiry,arc_no,arc_expiry,employee_id,employer_id,agency_id,designation,emergency_contact_name,emergency_contact_no,additional_comments,room_id,bed_number,shift_code,monthly_rent,date_moved_in,photo_path) VALUES (:full_name,:nationality,:contact_no,:passport_no,:passport_expiry,:arc_no,:arc_expiry,:employee_id,:employer_id,:agency_id,:designation,:emergency_contact_name,:emergency_contact_no,:additional_comments,:room_id,:bed_number,:shift_code,:monthly_rent,:date_moved_in,:photo_path)';
-            $pdo->prepare($sql)->execute($data); set_flash('Tenant added.');
+            $pdo->prepare($sql)->execute($data);
+            if ($pdo->inTransaction()) { $pdo->commit(); }
+            set_flash('Tenant added.');
         }
         redirect('tenants.php');
     } catch (PDOException $exception) {
       if ($pdo->inTransaction()) { $pdo->rollBack(); }
-        set_flash($exception->getCode() === '23000' ? 'Passport or ARC number is already assigned to another tenant.' : 'The tenant could not be saved. Please try again.', 'error');
-    } catch (RuntimeException $exception) { set_flash($exception->getMessage(), 'error'); }
+        delete_tenant_photo($photoPath);
+        if ($exception->getCode() === '23000' && $action === 'delete_tenant') {
+            set_flash('This tenant cannot be permanently deleted while payment or visitor records still refer to them. Move the tenant out instead.', 'error');
+        } elseif ($exception->getCode() === '23000') {
+            set_flash('The passport, ARC, or active room and bed assignment is already in use.', 'error');
+        } else {
+            set_flash('The tenant could not be saved. Please try again.', 'error');
+        }
+    } catch (RuntimeException $exception) { if ($pdo->inTransaction()) { $pdo->rollBack(); } delete_tenant_photo($photoPath); set_flash($exception->getMessage(), 'error'); }
     if ($action === 'import_tenants') { redirect('tenants.php?action=import'); }
     if ($action === 'save_tenant') { remember_tenant_form($_POST, $id); }
     redirect($id > 0 ? 'tenants.php?action=edit&id=' . $id : 'tenants.php?action=add');
