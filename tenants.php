@@ -17,6 +17,22 @@ function entity_name_exists(PDO $pdo, string $table, int $id): bool { $allowed =
 function active_room_count(PDO $pdo, int $roomId, int $exceptTenantId = 0): int { $statement = $pdo->prepare("SELECT COUNT(*) FROM tenants WHERE room_id = :room_id AND status = 'active' AND id != :tenant_id"); $statement->execute(['room_id' => $roomId, 'tenant_id' => $exceptTenantId]); return (int) $statement->fetchColumn(); }
 function room_capacity(PDO $pdo, int $roomId): int { $statement = $pdo->prepare('SELECT capacity FROM rooms WHERE id = :id'); $statement->execute(['id' => $roomId]); $value = $statement->fetchColumn(); return $value === false ? 0 : (int) $value; }
 function active_bed_taken(PDO $pdo, int $roomId, string $bedNumber, int $exceptTenantId = 0): bool { $statement = $pdo->prepare("SELECT 1 FROM tenants WHERE room_id = :room_id AND LOWER(bed_number) = LOWER(:bed_number) AND status = 'active' AND id != :tenant_id LIMIT 1"); $statement->execute(['room_id' => $roomId, 'bed_number' => $bedNumber, 'tenant_id' => $exceptTenantId]); return (bool) $statement->fetchColumn(); }
+function posted_item_ids(mixed $value): array {
+    if (!is_array($value)) { return []; }
+    $ids = [];
+    foreach ($value as $candidate) { $id = tenant_id($candidate); if ($id > 0) { $ids[$id] = $id; } }
+    return array_values($ids);
+}
+function valid_active_item_ids(PDO $pdo, array $ids): array {
+    if (!$ids) { return []; }
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $statement = $pdo->prepare("SELECT id FROM tenant_items WHERE is_active=1 AND id IN ($placeholders)");
+    $statement->execute($ids);
+    $valid = array_map('intval', $statement->fetchAll(PDO::FETCH_COLUMN));
+    sort($ids); sort($valid);
+    if ($ids !== $valid) { throw new RuntimeException('One or more selected tenant items are no longer available.'); }
+    return $valid;
+}
 function remember_tenant_form(array $input, int $tenantId): void {
     $allowed = ['full_name','nationality','contact_no','employee_id','passport_no','passport_expiry','arc_no','arc_expiry','shift_code','employer_id','agency_id','designation','emergency_contact_name','emergency_contact_no','room_id','bed_number','date_moved_in','monthly_rent','additional_comments'];
     $values = [];
@@ -25,6 +41,7 @@ function remember_tenant_form(array $input, int $tenantId): void {
         if (!is_scalar($value)) { continue; }
         $values[$field] = mb_substr((string) $value, 0, 5000);
     }
+    $values['item_ids'] = posted_item_ids($input['item_ids'] ?? []);
     $_SESSION['tenant_form_input'] = ['tenant_id' => $tenantId, 'values' => $values];
 }
 function consume_tenant_form(int $tenantId): array {
@@ -103,6 +120,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             set_flash('Tenant moved out. Their bed is now available.');
             redirect('tenants.php');
         }
+        if ($action === 'issue_tenant_item') {
+            $tenant = tenant_by_id($pdo, $id);
+            $itemId = tenant_id($_POST['item_id'] ?? null);
+            $issuedOn = valid_date(nullable_post('issued_on', 10), 'Issue date', true);
+            $referenceNo = nullable_post('reference_no', 100);
+            $issueNotes = nullable_post('issue_notes', 1000);
+            if (!$tenant || $tenant['status'] !== 'active') { throw new RuntimeException('Items can only be issued to an active tenant.'); }
+            valid_active_item_ids($pdo, [$itemId]);
+            if ($issuedOn > date('Y-m-d')) { throw new RuntimeException('Issue date cannot be in the future.'); }
+            $statement = $pdo->prepare('INSERT INTO tenant_item_assignments (tenant_id,item_id,reference_no,issue_notes,issued_on,issued_by) VALUES (:tenant_id,:item_id,:reference_no,:issue_notes,:issued_on,:issued_by)');
+            $statement->execute(['tenant_id' => $id, 'item_id' => $itemId, 'reference_no' => $referenceNo, 'issue_notes' => $issueNotes, 'issued_on' => $issuedOn, 'issued_by' => $user['id']]);
+            set_flash('Item issued to tenant.');
+            redirect('tenants.php?action=view&id=' . $id);
+        }
+        if ($action === 'return_tenant_item') {
+            $assignmentId = tenant_id($_POST['assignment_id'] ?? null);
+            $returnedOn = valid_date(nullable_post('returned_on', 10), 'Return date', true);
+            $returnNotes = nullable_post('return_notes', 1000);
+            $statement = $pdo->prepare('SELECT issued_on FROM tenant_item_assignments WHERE id=:assignment_id AND tenant_id=:tenant_id AND returned_on IS NULL');
+            $statement->execute(['assignment_id' => $assignmentId, 'tenant_id' => $id]);
+            $issuedOn = $statement->fetchColumn();
+            if ($issuedOn === false) { throw new RuntimeException('Active item assignment not found.'); }
+            if ($returnedOn < $issuedOn || $returnedOn > date('Y-m-d')) { throw new RuntimeException('Return date must be between the issue date and today.'); }
+            $statement = $pdo->prepare('UPDATE tenant_item_assignments SET returned_on=:returned_on,return_notes=:return_notes,returned_by=:returned_by WHERE id=:assignment_id AND tenant_id=:tenant_id AND returned_on IS NULL');
+            $statement->execute(['returned_on' => $returnedOn, 'return_notes' => $returnNotes, 'returned_by' => $user['id'], 'assignment_id' => $assignmentId, 'tenant_id' => $id]);
+            if ($statement->rowCount() !== 1) { throw new RuntimeException('This item was already returned.'); }
+            set_flash('Item marked as returned.');
+            redirect('tenants.php?action=view&id=' . $id);
+        }
         if ($action === 'reactivate_tenant') {
             $tenant = tenant_by_id($pdo, $id);
             $roomId = tenant_id($_POST['room_id'] ?? null);
@@ -164,6 +210,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (($employerId && !entity_name_exists($pdo, 'employers', $employerId)) || ($agencyId && !entity_name_exists($pdo, 'agencies', $agencyId))) { throw new RuntimeException('Select a valid employer and agency.'); }
         $shift = (string) ($_POST['shift_code'] ?? '');
         if (!in_array($shift, ['', 'DA', 'DB', 'NA', 'NB'], true)) { throw new RuntimeException('Select a valid shift.'); }
+        $initialItemIds = $id === 0 ? valid_active_item_ids($pdo, posted_item_ids($_POST['item_ids'] ?? [])) : [];
         $photoPath = upload_tenant_photo($_FILES['photo'] ?? []);
         $existingTenant = $id > 0 ? tenant_by_id($pdo, $id) : null;
         if ($id > 0 && !$existingTenant) { throw new RuntimeException('Tenant not found.'); }
@@ -195,6 +242,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $data['photo_path'] = $photoPath;
             $sql = 'INSERT INTO tenants (full_name,nationality,contact_no,passport_no,passport_expiry,arc_no,arc_expiry,employee_id,employer_id,agency_id,designation,emergency_contact_name,emergency_contact_no,additional_comments,room_id,bed_number,shift_code,monthly_rent,date_moved_in,photo_path) VALUES (:full_name,:nationality,:contact_no,:passport_no,:passport_expiry,:arc_no,:arc_expiry,:employee_id,:employer_id,:agency_id,:designation,:emergency_contact_name,:emergency_contact_no,:additional_comments,:room_id,:bed_number,:shift_code,:monthly_rent,:date_moved_in,:photo_path)';
             $pdo->prepare($sql)->execute($data);
+            $newTenantId = (int) $pdo->lastInsertId();
+            if ($initialItemIds) {
+                $issue = $pdo->prepare('INSERT INTO tenant_item_assignments (tenant_id,item_id,issued_on,issued_by) VALUES (:tenant_id,:item_id,:issued_on,:issued_by)');
+                foreach ($initialItemIds as $itemId) {
+                    $issue->execute(['tenant_id' => $newTenantId, 'item_id' => $itemId, 'issued_on' => $movedIn, 'issued_by' => $user['id']]);
+                }
+            }
             if ($pdo->inTransaction()) { $pdo->commit(); }
             set_flash('Tenant added.');
         }
@@ -203,7 +257,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       if ($pdo->inTransaction()) { $pdo->rollBack(); }
         delete_tenant_photo($photoPath);
         if ($exception->getCode() === '23000' && $action === 'delete_tenant') {
-            set_flash('This tenant cannot be permanently deleted while payment or visitor records still refer to them. Move the tenant out instead.', 'error');
+            set_flash('This tenant cannot be permanently deleted while payment, visitor, or item-assignment history refers to them. Move the tenant out instead.', 'error');
+        } elseif ($exception->getCode() === '23000' && $action === 'issue_tenant_item') {
+            set_flash('That item is already issued to this tenant.', 'error');
         } elseif ($exception->getCode() === '23000') {
             set_flash('The passport, ARC, or active room and bed assignment is already in use.', 'error');
         } else {
@@ -211,6 +267,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } catch (RuntimeException $exception) { if ($pdo->inTransaction()) { $pdo->rollBack(); } delete_tenant_photo($photoPath); set_flash($exception->getMessage(), 'error'); }
     if ($action === 'import_tenants') { redirect('tenants.php?action=import'); }
+    if (in_array($action, ['issue_tenant_item', 'return_tenant_item'], true)) { redirect('tenants.php?action=view&id=' . $id); }
+    if (in_array($action, ['save_profile_event', 'update_profile_event'], true)) { redirect('tenants.php?action=view&id=' . $id); }
     if ($action === 'save_tenant') { remember_tenant_form($_POST, $id); }
     redirect($id > 0 ? 'tenants.php?action=edit&id=' . $id : 'tenants.php?action=add');
 }
@@ -219,6 +277,7 @@ $action = (string) ($_GET['action'] ?? 'list'); $id = tenant_id($_GET['id'] ?? n
 $rooms = $pdo->query("SELECT r.id, r.room_number, r.capacity, d.id AS dormitory_id, d.name AS dormitory_name, COUNT(t.id) AS occupied FROM rooms r INNER JOIN dormitories d ON d.id=r.dormitory_id LEFT JOIN tenants t ON t.room_id=r.id AND t.status='active' GROUP BY r.id,r.room_number,r.capacity,d.id,d.name ORDER BY d.name,r.room_number")->fetchAll();
 $dormitories = $pdo->query('SELECT id,name FROM dormitories ORDER BY name')->fetchAll();
 $employers = $pdo->query('SELECT id,name FROM employers ORDER BY name')->fetchAll(); $agencies = $pdo->query('SELECT id,name FROM agencies ORDER BY name')->fetchAll();
+$activeTenantItems = $pdo->query('SELECT id,name,description FROM tenant_items WHERE is_active=1 ORDER BY name')->fetchAll();
 $flash = consume_flash();
 
 if ($action === 'import') {
@@ -289,6 +348,13 @@ if (in_array($action, ['add', 'edit'], true)) {
         <label>Move-in date *<input type="date" name="date_moved_in" value="<?= e($tenant['date_moved_in'] ?? date('Y-m-d')) ?>" required></label><label>Monthly rent (NT$) *<input type="number" name="monthly_rent" min="0" step="0.01" value="<?= e((string) ($tenant['monthly_rent'] ?? '0.00')) ?>" required></label>
         <label class="tenant-comments-field">Additional comments <small>Optional; maximum 5,000 characters</small><textarea name="additional_comments" maxlength="5000" rows="4" placeholder="Add any helpful notes about this tenant."><?= e($tenant['additional_comments'] ?? '') ?></textarea></label>
       </div>
+      <?php if ($action === 'add' && $activeTenantItems): $selectedInitialItems = posted_item_ids($tenant['item_ids'] ?? []); ?>
+        <fieldset class="tenant-item-checklist"><legend>Items issued at move-in</legend><p class="muted">Check each item being handed to this tenant. Details such as a key number can be added from the tenant profile afterward.</p><div class="tenant-item-check-grid">
+          <?php foreach ($activeTenantItems as $item): ?><label><input type="checkbox" name="item_ids[]" value="<?= (int) $item['id'] ?>" <?= in_array((int) $item['id'], $selectedInitialItems, true) ? 'checked' : '' ?>><span><strong><?= e($item['name']) ?></strong><?php if ($item['description']): ?><small><?= e($item['description']) ?></small><?php endif; ?></span></label><?php endforeach; ?>
+        </div></fieldset>
+      <?php elseif ($action === 'add'): ?>
+        <p class="tenant-items-empty-note">No tenant items are configured yet. An administrator can add them under Dormitories &amp; Rooms.</p>
+      <?php endif; ?>
       <button class="primary" type="submit">Save tenant</button> <a class="cancel" href="tenants.php">Cancel</a>
     </form>
     <script>
@@ -353,14 +419,41 @@ if ($action === 'view') {
     }
     $previousScheduleMonth = (clone $scheduleFirst)->modify('-1 month')->format('Y-m');
     $nextScheduleMonth = (clone $scheduleFirst)->modify('+1 month')->format('Y-m');
+    $statement = $pdo->prepare("SELECT a.id,a.item_id,a.reference_no,a.issue_notes,a.issued_on,a.returned_on,a.return_notes,
+        i.name item_name,i.is_active,issuer.full_name issued_by_name,receiver.full_name returned_by_name
+        FROM tenant_item_assignments a
+        INNER JOIN tenant_items i ON i.id=a.item_id
+        LEFT JOIN users issuer ON issuer.id=a.issued_by
+        LEFT JOIN users receiver ON receiver.id=a.returned_by
+        WHERE a.tenant_id=:tenant_id
+        ORDER BY (a.returned_on IS NULL) DESC,a.issued_on DESC,a.id DESC");
+    $statement->execute(['tenant_id' => $id]);
+    $itemAssignments = $statement->fetchAll();
+    $activeItemAssignments = array_values(array_filter($itemAssignments, fn(array $assignment): bool => $assignment['returned_on'] === null));
+    $activeAssignmentItemIds = array_map(fn(array $assignment): int => (int) $assignment['item_id'], $activeItemAssignments);
+    $issuableTenantItems = array_values(array_filter($activeTenantItems, fn(array $item): bool => !in_array((int) $item['id'], $activeAssignmentItemIds, true)));
+    $outstandingItemCount = count($activeItemAssignments);
     page_start('Tenant Profile', $user, 'tenants');
     ?>
+    <?php if ($flash): ?><p class="flash <?= e($flash['type']) ?>" role="status"><?= e($flash['message']) ?></p><?php endif; ?>
     <section class="tenant-profile-hero">
       <div><p class="eyebrow">Tenant Profile</p><div class="tenant-profile-title"><h1><?= e($tenant['full_name']) ?></h1><span class="<?= e($tenant['status']) ?>"><?= e(ucwords(str_replace('_', ' ', $tenant['status']))) ?></span></div><p><?= e(($tenant['dormitory_name'] ?? 'Unassigned') . ($tenant['room_number'] ? ' · Room ' . $tenant['room_number'] : '') . ($tenant['bed_number'] ? ' / Bed ' . $tenant['bed_number'] : '')) ?></p></div>
       <div class="tenant-profile-actions"><a class="hero-link" href="tenants.php"><span aria-hidden="true">←</span> Back to tenants</a><a class="button-link" href="tenants.php?action=edit&amp;id=<?= (int) $tenant['id'] ?>">Edit profile <span aria-hidden="true">→</span></a><?php if (($user['role'] ?? '') === 'admin'): ?><form method="post" onsubmit="return confirm('Permanently delete this tenant record? This cannot be undone.');"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="delete_tenant"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><button class="danger" type="submit">Delete permanently</button></form><?php endif; ?></div>
     </section>
     <section class="profile panel"><div class="photo"><?php if ($tenant['photo_path']): ?><img src="tenant_photo.php?id=<?= (int) $tenant['id'] ?>" alt="Photo of <?= e($tenant['full_name']) ?>"><?php else: ?>No photo<?php endif; ?></div><div><p><strong>Status:</strong> <?= e(ucwords(str_replace('_', ' ', $tenant['status']))) ?></p><p><strong>Room/bed:</strong> <?= e(($tenant['dormitory_name'] ?? 'Unassigned') . ' — ' . ($tenant['room_number'] ?? '') . ' ' . ($tenant['bed_number'] ?? '')) ?></p><p><strong>Shift:</strong> <?= $tenant['shift_code'] ? e(TENANT_EVENT_TYPES[strtolower($tenant['shift_code'])] ?? $tenant['shift_code']) : 'Not set' ?></p><p><strong>Contact:</strong> <?= e($tenant['contact_no']) ?></p><p><strong>Employer:</strong> <?= e($tenant['employer_name']) ?><?= $tenant['designation'] ? ' — ' . e($tenant['designation']) : '' ?></p><p><strong>Agency:</strong> <?= e($tenant['agency_name']) ?></p><p><strong>Passport:</strong> <?= e($tenant['passport_no']) ?><?= $tenant['passport_expiry'] ? ' (expires ' . e($tenant['passport_expiry']) . ')' : '' ?></p><p><strong>ARC:</strong> <?= e($tenant['arc_no']) ?><?= $tenant['arc_expiry'] ? ' (expires ' . e($tenant['arc_expiry']) . ')' : '' ?></p><p><strong>Emergency contact:</strong> <?= e($tenant['emergency_contact_name']) ?> <?= e($tenant['emergency_contact_no']) ?></p><p class="tenant-profile-comments"><strong>Additional comments:</strong> <?= $tenant['additional_comments'] ? nl2br(e($tenant['additional_comments'])) : '<span class="not-set">None</span>' ?></p></div></section>
-    <?php if ($tenant['status'] === 'active'): ?><section class="panel"><h2>Move out</h2><form method="post" class="inline-form" onsubmit="return confirm('Move this tenant out? Their bed will become available.');"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="move_out"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><label>Move-out date<input type="date" name="date_moved_out" value="<?= date('Y-m-d') ?>" required></label><button class="danger" type="submit">Move out tenant</button></form></section><?php endif; ?>
+    <section class="panel tenant-items-profile-card">
+      <div class="tenant-items-profile-heading"><div><p class="eyebrow">Property accountability</p><h2>Assigned items</h2><p><?= $outstandingItemCount ?> item<?= $outstandingItemCount === 1 ? '' : 's' ?> currently held</p></div><a href="reports.php?item_status=issued&amp;tenant_status=all" class="table-action">Open items report</a></div>
+      <?php if (!$activeItemAssignments): ?><div class="tenant-items-clear">No items are currently issued to this tenant.</div><?php else: ?>
+        <div class="tenant-current-items">
+          <?php foreach ($activeItemAssignments as $assignment): ?><article><div><strong><?= e($assignment['item_name']) ?></strong><span>Issued <?= e($assignment['issued_on']) ?><?= $assignment['issued_by_name'] ? ' by ' . e($assignment['issued_by_name']) : '' ?></span><?php if ($assignment['reference_no']): ?><small>Reference: <?= e($assignment['reference_no']) ?></small><?php endif; ?><?php if ($assignment['issue_notes']): ?><small><?= e($assignment['issue_notes']) ?></small><?php endif; ?></div><form method="post" class="tenant-item-return-form" onsubmit="return confirm('Mark this item as returned?');"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="return_tenant_item"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><input type="hidden" name="assignment_id" value="<?= (int) $assignment['id'] ?>"><label>Return date<input type="date" name="returned_on" min="<?= e($assignment['issued_on']) ?>" max="<?= date('Y-m-d') ?>" value="<?= date('Y-m-d') ?>" required></label><label>Return notes<input name="return_notes" maxlength="1000" placeholder="Optional condition or details"></label><button type="submit">Mark returned</button></form></article><?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+      <?php if ($tenant['status'] === 'active' && $issuableTenantItems): ?>
+        <form method="post" class="tenant-item-issue-form"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="issue_tenant_item"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><h3>Issue another item</h3><div class="form-grid"><label>Item *<select name="item_id" required><option value="">— Select item —</option><?php foreach ($issuableTenantItems as $item): ?><option value="<?= (int) $item['id'] ?>"><?= e($item['name']) ?></option><?php endforeach; ?></select></label><label>Issue date *<input type="date" name="issued_on" max="<?= date('Y-m-d') ?>" value="<?= date('Y-m-d') ?>" required></label><label>Reference / identifier<input name="reference_no" maxlength="100" placeholder="e.g. Key No. 12"></label><label>Issue notes<input name="issue_notes" maxlength="1000" placeholder="Optional details"></label></div><button class="primary" type="submit">Issue item</button></form>
+      <?php endif; ?>
+      <?php if ($itemAssignments): ?><details class="tenant-item-history"><summary>View complete item history (<?= count($itemAssignments) ?>)</summary><div class="table-scroll"><table><thead><tr><th>Item</th><th>Reference</th><th>Issued</th><th>Returned</th><th>Status</th></tr></thead><tbody><?php foreach ($itemAssignments as $assignment): ?><tr><td><strong><?= e($assignment['item_name']) ?></strong></td><td><?= $assignment['reference_no'] ? e($assignment['reference_no']) : '—' ?></td><td><?= e($assignment['issued_on']) ?><small><?= $assignment['issued_by_name'] ? e($assignment['issued_by_name']) : 'Unknown user' ?></small></td><td><?= $assignment['returned_on'] ? e($assignment['returned_on']) : '—' ?><small><?= $assignment['returned_by_name'] ? e($assignment['returned_by_name']) : '' ?></small></td><td><span class="item-state <?= $assignment['returned_on'] ? 'returned' : 'issued' ?>"><?= $assignment['returned_on'] ? 'Returned' : 'Issued' ?></span></td></tr><?php endforeach; ?></tbody></table></div></details><?php endif; ?>
+    </section>
+    <?php if ($tenant['status'] === 'active'): ?><section class="panel move-out-panel"><h2>Move out</h2><?php if ($outstandingItemCount > 0): ?><p class="outstanding-items-warning"><strong>Outstanding property:</strong> This tenant still has <?= $outstandingItemCount ?> issued item<?= $outstandingItemCount === 1 ? '' : 's' ?>. Moving out will not mark them as returned.</p><?php endif; ?><form method="post" class="inline-form" onsubmit="return confirm('Move this tenant out? Their bed will become available.<?= $outstandingItemCount > 0 ? ' Outstanding items will remain issued.' : '' ?>');"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="move_out"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><label>Move-out date<input type="date" name="date_moved_out" value="<?= date('Y-m-d') ?>" required></label><button class="danger" type="submit">Move out tenant</button></form></section><?php endif; ?>
     <?php if ($tenant['status'] === 'moved_out'): ?><section class="panel reactivate-panel"><h2>Reactivate tenant</h2><p class="muted">Assign an available room and bed before restoring this tenant to active status.</p><form method="post" class="reactivate-form"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="reactivate_tenant"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><div class="form-grid"><label>Room *<select name="room_id" required><option value="">— Select room —</option><?php foreach ($rooms as $room): $isCurrent = (int) $tenant['room_id'] === (int) $room['id']; $isFull = (int) $room['occupied'] >= (int) $room['capacity']; ?><option value="<?= (int) $room['id'] ?>" <?= $isCurrent ? 'selected' : '' ?> <?= $isFull ? 'disabled' : '' ?>><?= e($room['dormitory_name'] . ' — Room ' . $room['room_number'] . ' (' . $room['occupied'] . '/' . $room['capacity'] . ')') ?></option><?php endforeach; ?></select></label><label>Bed number *<input name="bed_number" maxlength="30" value="<?= e($tenant['bed_number'] ?? '') ?>" required></label><label>New move-in date *<input type="date" name="date_moved_in" value="<?= date('Y-m-d') ?>" required></label></div><button class="primary" type="submit" onclick="return confirm('Reactivate this tenant?');">Reactivate tenant</button></form></section><?php endif; ?>
     <section class="panel tenant-schedule">
       <div class="title-actions"><h2>Schedule — <?= e($scheduleFirst->format('F Y')) ?></h2><div class="calendar-actions"><a class="button-link secondary" href="tenants.php?action=view&id=<?= (int) $tenant['id'] ?>&schedule_month=<?= e($previousScheduleMonth) ?>">←</a><a class="button-link secondary" href="tenants.php?action=view&id=<?= (int) $tenant['id'] ?>&schedule_month=<?= date('Y-m') ?>">Today</a><a class="button-link secondary" href="tenants.php?action=view&id=<?= (int) $tenant['id'] ?>&schedule_month=<?= e($nextScheduleMonth) ?>">→</a></div></div>

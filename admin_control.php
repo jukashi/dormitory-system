@@ -15,9 +15,9 @@ function admin_staff_id(mixed $value): int
     return $id === false ? 0 : (int) $id;
 }
 
-function selected_permissions(array $permissions): array
+function selected_permissions(array $permissions, mixed $selected = null): array
 {
-    $selected = $_POST['permissions'] ?? [];
+    $selected = $selected ?? ($_POST['permissions'] ?? []);
     if (!is_array($selected)) {
         return [];
     }
@@ -31,6 +31,19 @@ function admin_format_bytes(int $bytes): string
     if ($bytes < 1024 * 1024) { return number_format($bytes / 1024, 1) . ' KB'; }
     if ($bytes < 1024 * 1024 * 1024) { return number_format($bytes / (1024 * 1024), 1) . ' MB'; }
     return number_format($bytes / (1024 * 1024 * 1024), 1) . ' GB';
+}
+
+function remember_admin_staff_form(array $input): void
+{
+    unset($input['csrf_token'], $input['password']);
+    $_SESSION['admin_staff_form'] = $input;
+}
+
+function consume_admin_staff_form(): array
+{
+    $input = $_SESSION['admin_staff_form'] ?? [];
+    unset($_SESSION['admin_staff_form']);
+    return is_array($input) ? $input : [];
 }
 
 function upload_company_logo(array $file): string
@@ -149,12 +162,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pdo->commit();
     } catch (PDOException $exception) {
         if ($pdo->inTransaction()) { $pdo->rollBack(); }
+        remember_admin_staff_form($_POST);
         set_flash($exception->getCode() === '23000' ? 'That username already exists.' : 'The staff account could not be saved.', 'error');
     } catch (RuntimeException $exception) {
         if ($pdo->inTransaction()) { $pdo->rollBack(); }
+        remember_admin_staff_form($_POST);
         set_flash($exception->getMessage(), 'error');
     }
-    redirect('admin_control.php');
+    redirect($action === 'update_staff' && $staffId > 0 ? 'admin_control.php?edit=' . $staffId : 'admin_control.php');
 }
 
 $edit = null;
@@ -168,7 +183,9 @@ $staff = $pdo->query("SELECT id,full_name,username,job_role,status FROM users WH
 $permissionRows = $pdo->query('SELECT user_id,permission_key FROM staff_permissions')->fetchAll();
 $staffPermissions = [];
 foreach ($permissionRows as $row) { $staffPermissions[(int) $row['user_id']][] = $row['permission_key']; }
-$editPermissions = $edit ? ($staffPermissions[(int) $edit['id']] ?? []) : [];
+$staffForm = consume_admin_staff_form();
+$formRecord = $staffForm ? array_merge($edit ?? [], $staffForm) : ($edit ?? []);
+$editPermissions = $staffForm ? selected_permissions($permissions, $staffForm['permissions'] ?? []) : ($edit ? ($staffPermissions[(int) $edit['id']] ?? []) : []);
 $companyLogo = app_setting('company_logo_path');
 $databaseStats = $pdo->query("SELECT COUNT(*) AS table_count,COALESCE(SUM(DATA_LENGTH+INDEX_LENGTH),0) AS total_bytes FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'")->fetch();
 $flash = consume_flash();
@@ -204,7 +221,7 @@ page_start('Administrator Control', $user, 'admin_control');
   <section class="panel staff-form admin-staff-form-ui">
     <div class="admin-section-heading"><span><svg viewBox="0 0 24 24"><path d="M15 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M16 11h6"/></svg></span><div><p class="eyebrow"><?= $edit ? 'Account update' : 'Team access' ?></p><h2><?= $edit ? 'Edit staff account' : 'Add staff account' ?></h2><p><?= $edit ? 'Update this team member’s profile and access.' : 'Create a secure profile and choose the modules this person can use.' ?></p></div></div>
     <form method="post"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="<?= $edit ? 'update_staff' : 'add_staff' ?>"><input type="hidden" name="id" value="<?= (int) ($edit['id'] ?? 0) ?>">
-      <div class="form-grid"><label>Full name *<input name="full_name" maxlength="150" value="<?= e($edit['full_name'] ?? '') ?>" required></label><label>Username *<input name="username" maxlength="50" value="<?= e($edit['username'] ?? '') ?>" required></label><label>Job role *<input name="job_role" list="job-role-options" maxlength="100" value="<?= e($edit['job_role'] ?? '') ?>" placeholder="e.g. Security Staff" required><datalist id="job-role-options"><?php foreach ($jobRoles as $jobRole): ?><option value="<?= e($jobRole) ?>"><?php endforeach; ?></datalist></label><label>Status<select name="status"><option value="active" <?= ($edit['status'] ?? 'active') === 'active' ? 'selected' : '' ?>>Active</option><option value="disabled" <?= ($edit['status'] ?? '') === 'disabled' ? 'selected' : '' ?>>Disabled</option></select></label><label>Password <?= $edit ? '<small>(leave blank to keep current)</small>' : '*' ?><input type="password" name="password" autocomplete="new-password" <?= $edit ? '' : 'required' ?>></label></div>
+      <div class="form-grid"><label>Full name *<input name="full_name" autocomplete="name" maxlength="150" value="<?= e($formRecord['full_name'] ?? '') ?>" required></label><label>Username *<input name="username" autocomplete="username" maxlength="50" value="<?= e($formRecord['username'] ?? '') ?>" required></label><label>Job role *<input name="job_role" list="job-role-options" maxlength="100" value="<?= e($formRecord['job_role'] ?? '') ?>" placeholder="e.g. Security Staff" required><datalist id="job-role-options"><?php foreach ($jobRoles as $jobRole): ?><option value="<?= e($jobRole) ?>"><?php endforeach; ?></datalist></label><label>Status<select name="status"><option value="active" <?= ($formRecord['status'] ?? 'active') === 'active' ? 'selected' : '' ?>>Active</option><option value="disabled" <?= ($formRecord['status'] ?? '') === 'disabled' ? 'selected' : '' ?>>Disabled</option></select></label><label>Password <?= $edit ? '<small>(leave blank to keep current)</small>' : '*' ?><input type="password" name="password" minlength="10" autocomplete="new-password" <?= $edit ? '' : 'required' ?>></label></div>
       <fieldset class="permissions"><legend>Module access *</legend><p class="muted">Select the work areas this staff member is allowed to use.</p><div class="permission-grid"><?php foreach ($permissions as $key => [$label, $description]): ?><label class="permission-check"><input type="checkbox" name="permissions[]" value="<?= e($key) ?>" <?= in_array($key, $editPermissions, true) ? 'checked' : '' ?>><span><strong><?= e($label) ?></strong><small><?= e($description) ?></small></span></label><?php endforeach; ?></div></fieldset>
       <div class="admin-form-actions"><button class="primary" type="submit"><?= $edit ? 'Save staff account' : 'Create staff account' ?> <span aria-hidden="true">→</span></button><?php if ($edit): ?> <a class="cancel" href="admin_control.php">Cancel</a><?php endif; ?></div>
     </form>

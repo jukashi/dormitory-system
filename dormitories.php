@@ -87,12 +87,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $statement = $pdo->prepare('DELETE FROM rooms WHERE id = :id');
             $statement->execute(['id' => $id]);
             set_flash('Room deleted.');
+        } elseif ($action === 'save_tenant_item') {
+            require_role('admin');
+            $id = positive_id($_POST['id'] ?? null);
+            $name = normalize_upper((string) ($_POST['name'] ?? '')) ?? '';
+            $description = trim((string) ($_POST['description'] ?? ''));
+            if ($name === '' || mb_strlen($name) > 150 || mb_strlen($description) > 255) {
+                throw new RuntimeException('Enter an item name of up to 150 characters and a description of up to 255 characters.');
+            }
+            if ($id > 0) {
+                $statement = $pdo->prepare('UPDATE tenant_items SET name=:name,description=:description WHERE id=:id');
+                $statement->execute(['name' => $name, 'description' => $description !== '' ? $description : null, 'id' => $id]);
+                if ($statement->rowCount() === 0 && !tenant_item_exists($pdo, $id)) {
+                    throw new RuntimeException('Tenant item not found.');
+                }
+                set_flash('Tenant item updated.');
+            } else {
+                $statement = $pdo->prepare('INSERT INTO tenant_items (name,description) VALUES (:name,:description)');
+                $statement->execute(['name' => $name, 'description' => $description !== '' ? $description : null]);
+                set_flash('Tenant item added.');
+            }
+        } elseif ($action === 'toggle_tenant_item') {
+            require_role('admin');
+            $id = positive_id($_POST['id'] ?? null);
+            if ($id === 0 || !tenant_item_exists($pdo, $id)) {
+                throw new RuntimeException('Tenant item not found.');
+            }
+            $statement = $pdo->prepare('UPDATE tenant_items SET is_active=IF(is_active=1,0,1) WHERE id=:id');
+            $statement->execute(['id' => $id]);
+            set_flash('Tenant item availability updated.');
         } else {
             throw new RuntimeException('Unknown request.');
         }
     } catch (PDOException $exception) {
         if ($pdo->inTransaction()) { $pdo->rollBack(); }
-        if ($exception->getCode() === '23000') {
+        if ($exception->getCode() === '23000' && $action === 'save_tenant_item') {
+            set_flash('A tenant item with that name already exists.', 'error');
+        } elseif ($exception->getCode() === '23000') {
             set_flash('This item cannot be deleted because it is being used, or the room number already exists in this dormitory.', 'error');
         } else {
             set_flash('The change could not be saved. Please try again.', 'error');
@@ -103,6 +134,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     redirect('dormitories.php');
+}
+
+function tenant_item_exists(PDO $pdo, int $id): bool
+{
+    $statement = $pdo->prepare('SELECT 1 FROM tenant_items WHERE id=:id');
+    $statement->execute(['id' => $id]);
+    return (bool) $statement->fetchColumn();
 }
 
 $editDormitory = null;
@@ -121,6 +159,14 @@ if ($editRoomId > 0) {
     $editRoom = $statement->fetch() ?: null;
 }
 
+$editTenantItem = null;
+$editTenantItemId = positive_id($_GET['edit_tenant_item'] ?? null);
+if ($editTenantItemId > 0 && ($user['role'] ?? '') === 'admin') {
+    $statement = $pdo->prepare('SELECT id,name,description FROM tenant_items WHERE id=:id');
+    $statement->execute(['id' => $editTenantItemId]);
+    $editTenantItem = $statement->fetch() ?: null;
+}
+
 $dormitories = $pdo->query('SELECT id, name, address FROM dormitories ORDER BY name')->fetchAll();
 $rooms = $pdo->query("SELECT r.id, r.dormitory_id, r.room_number, r.capacity, d.name AS dormitory_name,
     COUNT(t.id) AS occupied_beds
@@ -129,6 +175,12 @@ $rooms = $pdo->query("SELECT r.id, r.dormitory_id, r.room_number, r.capacity, d.
     LEFT JOIN tenants t ON t.room_id = r.id AND t.status = 'active'
     GROUP BY r.id, r.dormitory_id, r.room_number, r.capacity, d.name
     ORDER BY d.name, r.room_number")->fetchAll();
+$tenantItems = $pdo->query("SELECT i.id,i.name,i.description,i.is_active,COUNT(a.id) assignment_count,
+    SUM(CASE WHEN a.id IS NOT NULL AND a.returned_on IS NULL THEN 1 ELSE 0 END) active_assignment_count
+    FROM tenant_items i
+    LEFT JOIN tenant_item_assignments a ON a.item_id=i.id
+    GROUP BY i.id,i.name,i.description,i.is_active
+    ORDER BY i.is_active DESC,i.name")->fetchAll();
 $totalCapacity = array_sum(array_column($rooms, 'capacity'));
 $occupiedBeds = array_sum(array_column($rooms, 'occupied_beds'));
 $availableBeds = max(0, (int) $totalCapacity - (int) $occupiedBeds);
@@ -182,6 +234,30 @@ page_start('Dormitories & Rooms', $user, 'dormitories');
       <?php endif; ?>
     </section>
   </div>
+
+  <?php if (($user['role'] ?? '') === 'admin'): ?>
+    <section class="panel accommodation-form-card tenant-items-admin-card">
+      <div class="accommodation-card-heading"><span class="accommodation-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 14a5 5 0 1 1 4.6 3H9l-2 2H5v2H2v-3l5-5M15 7h.01"/></svg></span><div><p class="eyebrow">Tenant property</p><h2><?= $editTenantItem ? 'Edit tenant item' : 'Manage tenant items' ?></h2><p>Create the keys, cards, and equipment that can be issued to tenants.</p></div></div>
+      <div class="tenant-items-admin-layout">
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="<?= csrf_token() ?>">
+          <input type="hidden" name="action" value="save_tenant_item">
+          <input type="hidden" name="id" value="<?= (int) ($editTenantItem['id'] ?? 0) ?>">
+          <label>Item name<input name="name" maxlength="150" placeholder="e.g. Room key" value="<?= e($editTenantItem['name'] ?? '') ?>" required></label>
+          <label>Description<input name="description" maxlength="255" placeholder="Optional instructions or details" value="<?= e($editTenantItem['description'] ?? '') ?>"></label>
+          <button class="primary" type="submit"><?= $editTenantItem ? 'Save item changes' : 'Add tenant item' ?></button>
+          <?php if ($editTenantItem): ?><a class="cancel" href="dormitories.php">Cancel</a><?php endif; ?>
+        </form>
+        <div class="tenant-items-catalog">
+          <?php if (!$tenantItems): ?><p class="muted">No tenant items have been created yet.</p><?php else: ?>
+            <div class="table-scroll"><table><thead><tr><th>Item</th><th>Issued now</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+            <?php foreach ($tenantItems as $item): ?><tr><td><strong><?= e($item['name']) ?></strong><small><?= e($item['description']) ?></small></td><td><?= (int) $item['active_assignment_count'] ?></td><td><span class="item-state <?= (int) $item['is_active'] === 1 ? 'active' : 'inactive' ?>"><?= (int) $item['is_active'] === 1 ? 'Active' : 'Inactive' ?></span></td><td class="actions"><a class="table-action" href="dormitories.php?edit_tenant_item=<?= (int) $item['id'] ?>">Edit</a><form method="post" onsubmit="return confirm('<?= (int) $item['is_active'] === 1 ? 'Deactivate this item? It will no longer appear for new assignments.' : 'Reactivate this item?' ?>');"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="toggle_tenant_item"><input type="hidden" name="id" value="<?= (int) $item['id'] ?>"><button class="table-action" type="submit"><?= (int) $item['is_active'] === 1 ? 'Deactivate' : 'Activate' ?></button></form></td></tr><?php endforeach; ?>
+            </tbody></table></div>
+          <?php endif; ?>
+        </div>
+      </div>
+    </section>
+  <?php endif; ?>
 
   <section class="panel table-panel accommodation-table-card">
     <div class="accommodation-section-heading"><div><p class="eyebrow">Locations</p><h2>Dormitories</h2></div><span class="count-badge"><?= count($dormitories) ?> total</span></div>

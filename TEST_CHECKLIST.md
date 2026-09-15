@@ -5,6 +5,11 @@ Complete these checks using a test account and sample records before entering re
 - [ ] Log in with the admin account; log out; confirm that protected URLs redirect to login.
 - [ ] Create a dormitory and room; edit them; verify a room cannot be deleted while linked to a tenant or reduced below its active occupancy.
 - [ ] Add a tenant; upload a JPG/PNG/WebP image under 2 MB; verify profile information and photo display.
+- [ ] As an administrator, add, rename, deactivate, and reactivate a tenant item under Dormitories & Rooms; confirm inactive items cannot be newly issued.
+- [ ] Add a tenant with move-in item checkboxes selected; confirm each item appears on the tenant profile with the correct issue date and issuing user.
+- [ ] Issue an item with a reference number, reject a duplicate active assignment, mark it returned, and issue the same item again; confirm the complete history remains visible.
+- [ ] Move out a tenant who still holds an item; confirm the warning appears and the item remains outstanding until explicitly returned.
+- [ ] In Reports, filter tenant items by item, assignment status, tenant status, and dormitory; export the filtered CSV and confirm its rows match the screen.
 - [ ] Attempt to assign another active tenant to the same room/bed; confirm the system rejects it.
 - [ ] Fill a room to capacity; confirm the next active tenant cannot be assigned there.
 - [ ] Move out a tenant; confirm invalid dates are rejected, the occupied-bed count drops, and the bed can be reused.

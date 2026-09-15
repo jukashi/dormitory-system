@@ -81,5 +81,35 @@ HTML;
 
 function page_end(): void
 {
-    echo "  </main>\n</body>\n</html>";
+    echo <<<'HTML'
+  </main>
+  <script>
+    (() => {
+      const storageKey = 'dormitory-system:scroll-position';
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
+        sessionStorage.removeItem(storageKey);
+        if (!location.hash && saved && saved.path === location.pathname && Date.now() - saved.savedAt < 30000) {
+          requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo({ top: saved.top, left: 0, behavior: 'auto' })));
+        }
+      } catch (error) {
+        sessionStorage.removeItem(storageKey);
+      }
+
+      document.addEventListener('submit', (event) => {
+        if (event.defaultPrevented || !(event.target instanceof HTMLFormElement)) return;
+        const form = event.target;
+        const target = new URL(form.action || location.href, location.href);
+        if (target.origin !== location.origin || target.pathname !== location.pathname || form.dataset.resetScroll === 'true') return;
+        try {
+          sessionStorage.setItem(storageKey, JSON.stringify({ path: location.pathname, top: window.scrollY, savedAt: Date.now() }));
+        } catch (error) {
+          // Scroll restoration is an enhancement; form submission must still continue.
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
+HTML;
 }

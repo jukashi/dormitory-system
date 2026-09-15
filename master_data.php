@@ -69,7 +69,8 @@ page_start($title, $user, $masterType);
   <section class="panel master-form master-data-form">
     <div class="master-data-heading">
       <span class="master-data-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><?php if ($isEmployer): ?><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M4 21h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2Zm-2-8h20M10 13v2h4v-2"/><?php else: ?><path d="M3 21h18M5 21V9l7-5 7 5v12M9 21v-6h6v6M9 11h.01M15 11h.01"/><?php endif; ?></svg></span>
-      <div><p class="eyebrow">New record</p><h2>Add <?= e($singular) ?></h2><p>Create a <?= strtolower(e($singular)) ?> option for tenant profiles.</p></div>
+      <?php $article = in_array(strtolower($singular[0] ?? ''), ['a','e','i','o','u'], true) ? 'an' : 'a'; ?>
+      <div><p class="eyebrow">New record</p><h2>Add <?= e($singular) ?></h2><p>Create <?= $article ?> <?= strtolower(e($singular)) ?> option for tenant profiles.</p></div>
     </div>
     <form method="post" class="quick-add">
       <input type="hidden" name="csrf_token" value="<?= csrf_token() ?>">

@@ -20,7 +20,7 @@ The default local database is `ofw_dormitory_system` with XAMPP's `root` user an
 
 ## Existing installation
 
-Apply each not-yet-applied SQL file in `migrations` in phase order. Back up the database first; migrations are intended to run once. The current schema includes phases 9 through 18.
+Apply each not-yet-applied SQL file in `migrations` in phase order. Back up the database first; migrations are intended to run once. The current schema includes phases 9 through 19.
 
 ## Operations
 

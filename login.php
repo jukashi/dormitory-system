@@ -8,6 +8,7 @@ if (is_logged_in()) {
 }
 
 $error = '';
+$hasAdmin = (int) db()->query("SELECT COUNT(*) FROM users WHERE role = 'admin'")->fetchColumn() > 0;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_valid_csrf();
     $username = normalize_lower((string) ($_POST['username'] ?? '')) ?? '';
@@ -80,7 +81,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <button class="primary login-submit" type="submit"><span>Log in securely</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
       </form>
       <div class="login-divider"><span>Administrator access</span></div>
-      <p class="help login-setup">First installation? <a href="setup.php">Create the initial admin account <span aria-hidden="true">→</span></a></p>
+      <?php if (!$hasAdmin): ?><p class="help login-setup">First installation? <a href="setup.php">Create the initial admin account <span aria-hidden="true">→</span></a></p><?php endif; ?>
       <p class="login-security"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>Your session is protected by secure authentication.</p>
     </section>
   </main>

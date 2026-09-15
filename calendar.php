@@ -22,11 +22,13 @@ function csv_schedule_date(mixed $value): ?string { $raw = trim((string) $value)
 function active_tenant_exists(PDO $pdo, int $id): bool { $statement = $pdo->prepare("SELECT 1 FROM tenants WHERE id=:id AND status='active'"); $statement->execute(['id' => $id]); return (bool) $statement->fetchColumn(); }
 function active_staff_exists(PDO $pdo, int $id): bool { $statement = $pdo->prepare("SELECT 1 FROM users WHERE id=:id AND status='active'"); $statement->execute(['id' => $id]); return (bool) $statement->fetchColumn(); }
 function schedule_event(PDO $pdo, int $id): ?array { $statement = $pdo->prepare('SELECT s.*,t.full_name FROM schedules s INNER JOIN tenants t ON t.id=s.tenant_id WHERE s.id=:id'); $statement->execute(['id' => $id]); return $statement->fetch() ?: null; }
+function remember_calendar_event_form(array $input): void { unset($input['csrf_token'], $input['action']); $_SESSION['calendar_event_form'] = $input; }
+function consume_calendar_event_form(): array { $input=$_SESSION['calendar_event_form']??[]; unset($_SESSION['calendar_event_form']); return is_array($input)?$input:[]; }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_valid_csrf();
+    $action = (string) ($_POST['action'] ?? '');
     try {
-        $action = (string) ($_POST['action'] ?? '');
         if ($action === 'save_event') {
             $staffId = calendar_id($_POST['staff_id'] ?? null);
             $type = (string) ($_POST['event_type'] ?? '');
@@ -36,6 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$staffId || !active_staff_exists($pdo, $staffId) || !isset(STAFF_EVENT_TYPES[$type]) || !$start || mb_strlen($notes) > 5000) { throw new RuntimeException('Choose an active staff member, event type, and start date.'); }
             if ($end && $end < $start) { throw new RuntimeException('End date cannot be before start date.'); }
             $pdo->prepare('INSERT INTO staff_events (user_id,event_type,start_date,end_date,notes,created_by) VALUES (:user_id,:event_type,:start_date,:end_date,:notes,:created_by)')->execute(['user_id'=>$staffId,'event_type'=>$type,'start_date'=>$start,'end_date'=>$end,'notes'=>$notes ?: null,'created_by'=>$user['id']]);
+            unset($_SESSION['calendar_event_form']);
             set_flash('Staff event added.');
         } elseif ($action === 'add_comment') {
             $eventId = calendar_id($_POST['event_id'] ?? null);
@@ -84,8 +87,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } catch (Throwable $exception) { $pdo->rollBack(); throw $exception; } finally { fclose($handle); }
             set_flash("CSV import complete: $saved shift dates saved; $workDays work dates and $daysOff non-working dates processed. Tenant calendars update automatically from each tenant's current shift.");
         } else { throw new RuntimeException('Unknown request.'); }
-    } catch (RuntimeException $exception) { set_flash($exception->getMessage(), 'error'); }
-      catch (Throwable $exception) { set_flash('The schedule change could not be completed. Please try again.', 'error'); }
+    } catch (RuntimeException $exception) { if($action==='save_event'){remember_calendar_event_form($_POST);} set_flash($exception->getMessage(), 'error'); }
+      catch (Throwable $exception) { if($action==='save_event'){remember_calendar_event_form($_POST);} set_flash('The schedule change could not be completed. Please try again.', 'error'); }
+    if ($action === 'save_event') { redirect('calendar.php?action=add'); }
     redirect('calendar.php');
 }
 
@@ -95,10 +99,16 @@ $flash = consume_flash();
 $staffMembers = $pdo->query("SELECT id,full_name,role,job_role FROM users WHERE status='active' ORDER BY full_name")->fetchAll();
 
 if ($action === 'add') {
+    $eventForm = consume_calendar_event_form();
+    $eventStaffId = calendar_id($eventForm['staff_id'] ?? null);
+    $eventType = isset(STAFF_EVENT_TYPES[(string)($eventForm['event_type']??'')]) ? (string)$eventForm['event_type'] : 'work_schedule';
+    $eventStart = calendar_date($eventForm['start_date'] ?? null) ?? date('Y-m-d');
+    $eventEnd = calendar_date($eventForm['end_date'] ?? null);
     page_start('Add Schedule Event', $user, 'calendar');
     ?>
     <p class="eyebrow">Staff Schedule</p><h1>Add staff event</h1>
-    <form class="panel payment-form" method="post"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="save_event"><label>Administrator or staff member *<select name="staff_id" required><option value="">— Select active staff member —</option><?php foreach ($staffMembers as $member): ?><option value="<?= (int) $member['id'] ?>"><?= e($member['full_name']) ?> — <?= e($member['job_role'] ?: ucfirst($member['role'])) ?></option><?php endforeach; ?></select></label><div class="form-grid"><label>Event type *<select name="event_type"><?php foreach (STAFF_EVENT_TYPES as $key => $label): ?><option value="<?= e($key) ?>"><?= e($label) ?></option><?php endforeach; ?></select></label><label>Start date *<input type="date" name="start_date" value="<?= date('Y-m-d') ?>" required></label><label>End date <small>(optional)</small><input type="date" name="end_date"></label></div><label>Notes<textarea name="notes" maxlength="5000" rows="4"></textarea></label><button class="primary" type="submit">Add staff event</button> <a class="cancel" href="calendar.php">Cancel</a></form>
+    <?php if ($flash): ?><p class="flash <?= e($flash['type']) ?>" role="status"><?= e($flash['message']) ?></p><?php endif; ?>
+    <form class="panel payment-form" method="post"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="save_event"><label>Administrator or staff member *<select name="staff_id" required><option value="">— Select active staff member —</option><?php foreach ($staffMembers as $member): ?><option value="<?= (int) $member['id'] ?>" <?= $eventStaffId === (int)$member['id'] ? 'selected' : '' ?>><?= e($member['full_name']) ?> — <?= e($member['job_role'] ?: ucfirst($member['role'])) ?></option><?php endforeach; ?></select></label><div class="form-grid"><label>Event type *<select name="event_type"><?php foreach (STAFF_EVENT_TYPES as $key => $label): ?><option value="<?= e($key) ?>" <?= $eventType === $key ? 'selected' : '' ?>><?= e($label) ?></option><?php endforeach; ?></select></label><label>Start date *<input type="date" name="start_date" value="<?= e($eventStart) ?>" required></label><label>End date <small>(optional)</small><input type="date" name="end_date" value="<?= e($eventEnd ?? '') ?>"></label></div><label>Notes<textarea name="notes" maxlength="5000" rows="4"><?= e((string)($eventForm['notes']??'')) ?></textarea></label><button class="primary" type="submit">Add staff event</button> <a class="cancel" href="calendar.php">Cancel</a></form>
     <?php page_end(); exit;
 }
 

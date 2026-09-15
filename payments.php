@@ -9,6 +9,17 @@ $pdo = db();
 function payment_id(mixed $value): int { $id = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]); return $id === false ? 0 : (int) $id; }
 function valid_month(mixed $value): ?string { $month = (string) $value; if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month)) { return null; } return $month . '-01'; }
 function valid_payment_date(mixed $value): ?string { $date = (string) $value; $check = DateTime::createFromFormat('Y-m-d', $date); return $check && $check->format('Y-m-d') === $date ? $date : null; }
+function remember_payment_form(array $input): void
+{
+    unset($input['csrf_token'], $input['action']);
+    $_SESSION['payment_form'] = $input;
+}
+function consume_payment_form(): array
+{
+    $input = $_SESSION['payment_form'] ?? [];
+    unset($_SESSION['payment_form']);
+    return is_array($input) ? $input : [];
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_valid_csrf();
     try {
@@ -38,8 +49,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pdo->commit();
         set_flash('Payment recorded.');
         redirect('payments.php?month=' . substr($paymentMonth, 0, 7));
-    } catch (RuntimeException $exception) { if ($pdo->inTransaction()) { $pdo->rollBack(); } set_flash($exception->getMessage(), 'error'); redirect('payments.php?action=add'); }
-      catch (PDOException $exception) { if ($pdo->inTransaction()) { $pdo->rollBack(); } error_log('Payment operation failed: ' . $exception->getMessage()); set_flash('The payment could not be recorded. Please try again.', 'error'); redirect('payments.php?action=add'); }
+    } catch (RuntimeException $exception) { if ($pdo->inTransaction()) { $pdo->rollBack(); } remember_payment_form($_POST); set_flash($exception->getMessage(), 'error'); redirect('payments.php?action=add'); }
+      catch (PDOException $exception) { if ($pdo->inTransaction()) { $pdo->rollBack(); } remember_payment_form($_POST); error_log('Payment operation failed: ' . $exception->getMessage()); set_flash('The payment could not be recorded. Please try again.', 'error'); redirect('payments.php?action=add'); }
 }
 
 $action = (string) ($_GET['action'] ?? 'list');
@@ -48,7 +59,12 @@ $tenants = $pdo->query("SELECT id,full_name,monthly_rent,room_id FROM tenants WH
 $flash = consume_flash();
 
 if ($action === 'add') {
-    $preselectedTenantId = payment_id($_GET['tenant_id'] ?? null);
+    $paymentForm = consume_payment_form();
+    $preselectedTenantId = payment_id($paymentForm['tenant_id'] ?? $_GET['tenant_id'] ?? null);
+    $formAmount = (string) ($paymentForm['amount'] ?? '');
+    $formMonth = preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', (string) ($paymentForm['payment_month'] ?? '')) ? (string) $paymentForm['payment_month'] : $selectedMonth;
+    $formDate = valid_payment_date($paymentForm['payment_date'] ?? null) ?? date('Y-m-d');
+    $formMethod = in_array(($paymentForm['payment_method'] ?? ''), ['cash','bank_transfer','payroll_deduction','other'], true) ? (string) $paymentForm['payment_method'] : 'cash';
     page_start('Record Payment', $user, 'payments');
     ?>
     <p class="eyebrow">Rent Ledger</p><h1>Record payment</h1>
@@ -56,11 +72,11 @@ if ($action === 'add') {
     <?php if (!$tenants): ?><section class="panel"><p class="muted">There are no active tenants to receive a payment. Add a tenant first.</p><a class="button-link" href="tenants.php?action=add">Add tenant</a></section><?php else: ?>
     <form method="post" class="panel payment-form"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="save_payment">
       <label>Tenant *<select id="tenant_id" name="tenant_id" required onchange="fillRent()"><option value="">— Select tenant —</option><?php foreach ($tenants as $tenant): ?><option value="<?= (int) $tenant['id'] ?>" data-rent="<?= e((string) $tenant['monthly_rent']) ?>" <?= $preselectedTenantId === (int) $tenant['id'] ? 'selected' : '' ?>><?= e($tenant['full_name']) ?></option><?php endforeach; ?></select></label>
-      <div class="form-grid"><label>Amount (NT$) *<input id="amount" type="number" name="amount" min="0.01" step="0.01" required></label><label>For month *<input type="month" name="payment_month" value="<?= e($selectedMonth) ?>" required></label><label>Payment date *<input type="date" name="payment_date" value="<?= date('Y-m-d') ?>" required></label><label>Method *<select name="payment_method"><option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="payroll_deduction">Payroll deduction</option><option value="other">Other</option></select></label><label>Reference number<input name="reference_no" maxlength="100"></label></div>
-      <label>Notes<textarea name="notes" maxlength="5000" rows="4"></textarea></label>
-      <?php if ($user['role'] === 'admin'): ?><label class="checkbox"><input type="checkbox" name="allow_duplicate" value="1"> Allow an additional payment for the same tenant and month</label><?php endif; ?>
+      <div class="form-grid"><label>Amount (NT$) *<input id="amount" type="number" name="amount" min="0.01" step="0.01" value="<?= e($formAmount) ?>" required></label><label>For month *<input type="month" name="payment_month" value="<?= e($formMonth) ?>" required></label><label>Payment date *<input type="date" name="payment_date" value="<?= e($formDate) ?>" required></label><label>Method *<select name="payment_method"><option value="cash" <?= $formMethod === 'cash' ? 'selected' : '' ?>>Cash</option><option value="bank_transfer" <?= $formMethod === 'bank_transfer' ? 'selected' : '' ?>>Bank transfer</option><option value="payroll_deduction" <?= $formMethod === 'payroll_deduction' ? 'selected' : '' ?>>Payroll deduction</option><option value="other" <?= $formMethod === 'other' ? 'selected' : '' ?>>Other</option></select></label><label>Reference number<input name="reference_no" maxlength="100" value="<?= e((string) ($paymentForm['reference_no'] ?? '')) ?>"></label></div>
+      <label>Notes<textarea name="notes" maxlength="5000" rows="4"><?= e((string) ($paymentForm['notes'] ?? '')) ?></textarea></label>
+      <?php if ($user['role'] === 'admin'): ?><label class="checkbox"><input type="checkbox" name="allow_duplicate" value="1" <?= isset($paymentForm['allow_duplicate']) ? 'checked' : '' ?>> Allow an additional payment for the same tenant and month</label><?php endif; ?>
       <button class="primary" type="submit">Save payment</button> <a class="cancel" href="payments.php">Cancel</a>
-    </form><script>function fillRent(){const option=document.getElementById('tenant_id').selectedOptions[0];if(option&&option.dataset.rent){document.getElementById('amount').value=option.dataset.rent;}}fillRent();</script>
+    </form><script>function fillRent(){const option=document.getElementById('tenant_id').selectedOptions[0];const amount=document.getElementById('amount');if(option&&option.dataset.rent&&amount&&!amount.value){amount.value=option.dataset.rent;}}fillRent();</script>
     <?php endif; page_end(); exit;
 }
 
