@@ -25,11 +25,13 @@ Server environment variables with the same names take precedence over `.env`.
 ## New installation on XAMPP
 
 1. Copy the project to `C:\xampp\htdocs\dormitory-system`.
-2. Copy `.env.example` to `.env` and enter the local MySQL credentials.
-3. Start Apache and MySQL.
-4. Import `database.sql` through phpMyAdmin.
-5. Open `http://localhost/dormitory-system/`. With no administrator in the new database, the one-time administrator setup opens automatically.
+2. Start Apache and MySQL.
+3. Open `http://localhost/dormitory-system/install/` on that computer.
+4. Confirm the prefilled host, port, and database name; enter the database credentials and choose the first administrator’s username and password.
+5. Select **Install system**. The installer creates the schema, writes the local `.env`, creates the administrator, signs in, and then locks itself.
 6. Complete `TEST_CHECKLIST.md` before entering production data.
+
+On a default XAMPP installation, the database username is usually `root` and the database password is blank. The installer is restricted to the local computer and will not overwrite an existing `.env` or a database that already contains tables. Manual `.env` and phpMyAdmin installation remain available when needed.
 
 ## Ubuntu Server deployment
 

@@ -311,3 +311,62 @@ a:focus-visible,button:focus-visible { outline:3px solid var(--accent); outline-
 @media (prefers-reduced-motion:reduce) {
   *,*::before,*::after { scroll-behavior:auto !important; transition-duration:.01ms !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; }
 }
+
+/* First-install commissioning desk */
+.install-page { min-height:100vh; margin:0; padding:38px; color:#18313e; background:radial-gradient(circle at 9% 8%,#3b879f2e 0,transparent 25%),radial-gradient(circle at 93% 90%,#eab46426 0,transparent 24%),linear-gradient(135deg,#102f43,#18516d 56%,#287b8c); }
+.install-page::before { position:fixed; inset:0; opacity:.22; background-image:linear-gradient(#ffffff0a 1px,transparent 1px),linear-gradient(90deg,#ffffff0a 1px,transparent 1px); background-size:52px 52px; pointer-events:none; content:""; }
+.install-shell { position:relative; z-index:1; width:min(1120px,100%); margin:0 auto; overflow:hidden; border:1px solid #ffffff2b; border-radius:22px; background:#f8faf9; box-shadow:0 32px 90px #061d2b78; }
+.install-mast { display:flex; align-items:center; justify-content:space-between; gap:28px; padding:20px 28px; color:#fff; background:#102f43; }
+.install-brand { display:flex; align-items:center; gap:11px; }
+.install-brand > span { display:grid; flex:0 0 39px; place-items:center; width:39px; height:39px; border-radius:11px; color:#17384c; background:#eab464; }
+.install-brand svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.install-brand strong,.install-brand small { display:block; }
+.install-brand strong { font-size:14px; letter-spacing:.01em; }
+.install-brand small { margin-top:2px; color:#9fc2d0; font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
+.install-progress { display:flex; align-items:center; gap:9px; color:#8fb2c0; font-size:11px; font-weight:bold; letter-spacing:.04em; text-transform:uppercase; }
+.install-progress span { display:flex; align-items:center; gap:6px; }
+.install-progress b { display:grid; place-items:center; width:23px; height:23px; border:1px solid #ffffff31; border-radius:50%; font-size:10px; }
+.install-progress .active { color:#fff; }
+.install-progress .active b { color:#17384c; border-color:#eab464; background:#eab464; }
+.install-progress i { width:31px; height:1px; background:#ffffff26; }
+.install-intro { display:flex; align-items:flex-end; justify-content:space-between; gap:35px; padding:37px 38px 27px; }
+.install-intro h1 { margin:0 0 9px; color:#17384c; font-size:34px; letter-spacing:-.025em; }
+.install-intro > div > p:last-child { max-width:590px; margin:0; color:#647980; line-height:1.55; }
+.install-summary { flex:0 0 245px; padding:15px 17px; border-left:4px solid #eab464; border-radius:8px; background:#fff4e2; }
+.install-summary span,.install-summary strong,.install-summary small { display:block; }
+.install-summary span { color:#8d5c13; font-size:10px; font-weight:bold; letter-spacing:.08em; text-transform:uppercase; }
+.install-summary strong { margin-top:4px; color:#253b45; font-size:17px; }
+.install-summary small { margin-top:3px; color:#786847; }
+.install-alert { display:grid; gap:3px; margin:0 38px 20px; padding:12px 14px; border:1px solid #efcccc; border-left:4px solid var(--danger); border-radius:8px; color:#7d2020; background:#fff0f0; }
+.install-alert strong { font-size:13px; }
+.install-alert span { font-size:12px; }
+.install-form { padding:0 38px 31px; }
+.install-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+.install-section { padding:23px; border:1px solid #d7e1de; border-top:4px solid #2a7188; border-radius:12px; background:#fff; box-shadow:0 8px 24px #173f590b; }
+.install-section.admin-section { border-top-color:#43806d; }
+.install-section-heading { display:flex; gap:12px; align-items:flex-start; padding-bottom:17px; border-bottom:1px solid #e5ebe9; }
+.install-number { display:grid; flex:0 0 39px; place-items:center; width:39px; height:39px; border-radius:10px; color:#24647b; background:#e5f0f3; font-size:11px; font-weight:bold; letter-spacing:.05em; }
+.admin-section .install-number { color:#286653; background:#e4f3ed; }
+.install-section-heading h2 { margin:0; color:#213a45; font-size:19px; }
+.install-section-heading p { margin:3px 0 0; color:#718287; font-size:12px; line-height:1.4; }
+.install-fields { display:grid; gap:14px; margin-top:18px; }
+.database-fields { grid-template-columns:minmax(0,1fr) 110px; }
+.install-fields .wide { grid-column:1 / -1; }
+.install-fields label { margin:0; color:#334c56; font-size:12px; }
+.install-fields input { min-height:44px; margin-top:6px; border-radius:8px; color:#203943; background:#fbfcfb; }
+.install-fields input[readonly] { color:#4c626a; background:#edf2f0; cursor:not-allowed; }
+.install-fields small { display:block; margin-top:5px; color:#7c8d92; font-size:10px; font-weight:normal; line-height:1.4; }
+.install-action-row { display:flex; align-items:center; justify-content:space-between; gap:24px; margin-top:18px; padding:17px 19px; border:1px solid #cddbd8; border-radius:11px; background:#edf4f1; }
+.install-action-row strong,.install-action-row div > span { display:block; }
+.install-action-row strong { color:#27463e; font-size:13px; }
+.install-action-row div > span { margin-top:3px; color:#667c76; font-size:11px; }
+.install-submit { display:inline-flex; align-items:center; justify-content:center; gap:9px; min-height:45px; margin:0; padding:11px 19px; border:0; border-radius:8px; color:#fff; background:#205f78; box-shadow:0 7px 17px #1c52672b; font-weight:bold; text-decoration:none; white-space:nowrap; }
+.install-submit:hover { color:#fff; background:#174b62; }
+.install-submit span { font-size:18px; line-height:1; }
+.install-local-note { margin:-13px 0 22px; color:#75868b; font-size:10px; text-align:center; }
+.install-complete { max-width:620px; margin:0 auto; padding:75px 38px 80px; text-align:center; }
+.install-complete-icon { display:grid; width:62px; height:62px; margin:0 auto 19px; place-items:center; border-radius:18px; color:#fff; background:#43806d; box-shadow:0 12px 28px #285f4d38; font-size:29px; }
+.install-complete h1 { margin:0 0 10px; color:#17384c; font-size:31px; }
+.install-complete > p:not(.eyebrow) { margin:0 auto 24px; color:#667b82; line-height:1.55; }
+@media (max-width:820px) { .install-page { padding:22px; } .install-mast,.install-intro { align-items:flex-start; flex-direction:column; } .install-progress { width:100%; justify-content:space-between; } .install-progress i { flex:1; } .install-intro { padding:30px 27px 22px; } .install-summary { width:100%; flex-basis:auto; } .install-alert { margin-right:27px; margin-left:27px; } .install-form { padding-right:27px; padding-left:27px; } .install-form-grid { grid-template-columns:1fr; } }
+@media (max-width:520px) { .install-page { padding:0; background:#f8faf9; } .install-shell { min-height:100vh; border:0; border-radius:0; box-shadow:none; } .install-mast { padding:17px 19px; } .install-progress { gap:5px; font-size:9px; } .install-progress i { min-width:8px; } .install-progress b { width:20px; height:20px; } .install-intro { padding:27px 20px 20px; } .install-intro h1 { font-size:29px; } .install-alert { margin:0 20px 17px; } .install-form { padding:0 20px 25px; } .install-section { padding:19px; } .database-fields { grid-template-columns:1fr 92px; } .install-action-row { align-items:stretch; flex-direction:column; } .install-submit { width:100%; } }

@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+$hasServerCredentials = getenv('DB_USER') !== false && getenv('DB_PASSWORD') !== false;
+$hasDatabaseConfiguration = is_file(__DIR__ . '/.env') || $hasServerCredentials;
+if (!$hasDatabaseConfiguration) {
+    header('Location: install/');
+    exit;
+}
+
 require_once __DIR__ . '/app/includes/auth.php';
 
 if (is_logged_in()) {

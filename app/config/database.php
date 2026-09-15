@@ -35,8 +35,10 @@ function database_env_file(): array
         }
         $value = trim(substr($line, $separator + 1));
         $length = strlen($value);
-        if ($length >= 2 && (($value[0] === '"' && $value[$length - 1] === '"') || ($value[0] === "'" && $value[$length - 1] === "'"))) {
-            $value = substr($value, 1, -1);
+        if ($length >= 2 && $value[0] === '"' && $value[$length - 1] === '"') {
+            $value = strtr(substr($value, 1, -1), ['\\"' => '"', '\\\\' => '\\']);
+        } elseif ($length >= 2 && $value[0] === "'" && $value[$length - 1] === "'") {
+            $value = strtr(substr($value, 1, -1), ["\\'" => "'", '\\\\' => '\\']);
         }
         $values[$key] = $value;
     }
