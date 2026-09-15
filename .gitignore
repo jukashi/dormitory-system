@@ -1,0 +1,10 @@
+# Runtime uploads must not be included in clean installations.
+/uploads/company/*
+!/uploads/company/.gitkeep
+/uploads/tenants/*
+!/uploads/tenants/.gitkeep
+!/uploads/tenants/.htaccess
+
+# Local browser and standalone-server test artifacts.
+/.playwright-cli/
+/.runtime-sessions/

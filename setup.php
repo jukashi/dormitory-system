@@ -9,6 +9,8 @@ if ($adminCount > 0) {
 }
 
 $error = '';
+$fullName = '';
+$username = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_valid_csrf();
     $fullName = normalize_upper((string) ($_POST['full_name'] ?? '')) ?? '';
@@ -69,12 +71,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <h1>Create the administrator account</h1>
     <p class="muted">This page stops working automatically after the first admin is created.</p>
     <?php if ($error !== ''): ?><p class="alert" role="alert"><?= e($error) ?></p><?php endif; ?>
-    <form method="post" novalidate>
+    <form method="post">
       <input type="hidden" name="csrf_token" value="<?= csrf_token() ?>">
-      <label>Full name<input name="full_name" required autofocus></label>
-      <label>Username<input name="username" required></label>
-      <label>Password <small>(at least 10 characters)</small><input type="password" name="password" autocomplete="new-password" required></label>
-      <label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" required></label>
+      <label>Full name<input name="full_name" value="<?= e($fullName) ?>" maxlength="150" autocomplete="name" required autofocus></label>
+      <label>Username<input name="username" value="<?= e($username) ?>" minlength="3" maxlength="50" pattern="[A-Za-z0-9_.-]{3,50}" autocomplete="username" required></label>
+      <label>Password <small>(at least 10 characters)</small><input type="password" name="password" minlength="10" autocomplete="new-password" required></label>
+      <label>Confirm password<input type="password" name="confirm_password" minlength="10" autocomplete="new-password" required></label>
       <button class="primary" type="submit">Create administrator account</button>
     </form>
     <p class="help"><a href="login.php">Back to login</a></p>

@@ -10,11 +10,14 @@ An offline PHP 8 and MariaDB dormitory-management application for XAMPP. It mana
 
 ## New installation
 
-1. Start Apache and MySQL from the XAMPP Control Panel.
-2. Import `database.sql` through phpMyAdmin.
-3. Open `http://localhost/dormitory-system/`.
-4. Follow the first-time setup link to create the initial administrator.
-5. Complete `TEST_CHECKLIST.md` before entering production data.
+1. Copy this project folder to `C:\xampp\htdocs\dormitory-system` on the new computer.
+2. Start Apache and MySQL from the XAMPP Control Panel.
+3. Open phpMyAdmin at `http://localhost/phpmyadmin/` and import `database.sql`.
+4. Open `http://localhost/dormitory-system/`. With no administrator in the new database, the system automatically opens the one-time setup page.
+5. Enter the administrator's name, username, and a password containing at least 10 characters. The setup page locks automatically after this account is created.
+6. Complete `TEST_CHECKLIST.md` before entering production data.
+
+`database.sql` is the complete clean-install schema. It intentionally contains no administrator credentials, tenants, rooms, payments, visitors, maintenance records, schedules, or uploaded files. Do not import files from `migrations` after importing `database.sql`; those files are only for upgrading older installations.
 
 The default local database is `ofw_dormitory_system` with XAMPP's `root` user and a blank password. Override these values without editing source by setting `DORMITORY_DB_HOST`, `DORMITORY_DB_NAME`, `DORMITORY_DB_USER`, and `DORMITORY_DB_PASS` in the Apache environment.
 
