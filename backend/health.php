@@ -10,7 +10,7 @@ try {
     echo json_encode([
         'success' => true,
         'message' => 'OFW Dormitory backend can connect to MySQL.',
-        'database' => DB_NAME,
+        'database' => database_config()['name'],
         'php' => PHP_VERSION,
     ]);
 } catch (Throwable $e) {

@@ -1,36 +1,32 @@
 # Backup and restore — OFW Dormitory System
 
-Keep backups outside `htdocs` so nobody can download them through the browser. This guide uses `C:\xampp\backups`.
+Keep backups outside the Apache document root and restrict access to them.
 
 ## Backup
 
-1. Create `C:\xampp\backups` if it does not yet exist.
-2. Open **Command Prompt**.
-3. Run the following, changing the date in the filename:
+Create a database dump using the application database account. Enter the password only at the interactive prompt.
 
-```bat
-C:\xampp\mysql\bin\mysqldump.exe -u root ofw_dormitory_system > C:\xampp\backups\ofw_dormitory_2026-08-20.sql
+```bash
+mkdir -p "$HOME/dormitory-backups"
+mysqldump -h 127.0.0.1 -u dormitory_user -p \
+  --single-transaction --routines --triggers \
+  ofw_dormitory_system > "$HOME/dormitory-backups/ofw_dormitory_system_YYYY-MM-DD.sql"
 ```
 
-If the MySQL `root` account has a password, use `-p` after `root`; MySQL will ask for it without showing it on screen.
-
-Back up the tenant images too by copying this folder to the same backup location:
-
-```text
-C:\xampp\htdocs\dormitory-system\uploads\tenants
-```
+Also back up `uploads/company` and `uploads/tenants` so company and tenant images can be restored with the database.
 
 ## Restore
 
-1. Stop people from using the system while restoring.
-2. Create a fresh backup first.
-3. In Command Prompt, run:
+1. Stop users from changing data during the restore.
+2. Back up the current database and uploads first.
+3. Restore the selected dump:
 
-```bat
-C:\xampp\mysql\bin\mysql.exe -u root ofw_dormitory_system < C:\xampp\backups\ofw_dormitory_2026-08-20.sql
+```bash
+mysql -h 127.0.0.1 -u dormitory_user -p \
+  ofw_dormitory_system < "$HOME/dormitory-backups/ofw_dormitory_system_YYYY-MM-DD.sql"
 ```
 
-4. Restore the backed-up `uploads\tenants` folder if tenant photographs are needed.
-5. Log in and verify the dashboard, tenant count, and latest payment before allowing normal use.
+4. Restore the matching upload directories.
+5. Verify the dashboard, tenant count, latest payment, and a protected image before reopening the system.
 
 Never restore an SQL file from an unknown source.

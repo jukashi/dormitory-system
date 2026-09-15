@@ -1,4 +1,5 @@
 # Runtime uploads must not be included in clean installations.
+/.env
 /uploads/company/*
 !/uploads/company/.gitkeep
 /uploads/tenants/*

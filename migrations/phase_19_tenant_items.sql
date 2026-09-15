@@ -25,7 +25,7 @@ CREATE TABLE tenant_item_assignments (
   returned_on DATE NULL,
   return_notes VARCHAR(1000) NULL,
   returned_by INT UNSIGNED NULL,
-  active_item_id INT UNSIGNED AS (CASE WHEN returned_on IS NULL THEN item_id ELSE NULL END) PERSISTENT,
+  active_item_id INT UNSIGNED AS (CASE WHEN returned_on IS NULL THEN item_id ELSE NULL END) STORED,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_tenant_item_assignments_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE RESTRICT,

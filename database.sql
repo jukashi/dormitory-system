@@ -1,6 +1,9 @@
 -- OFW Dormitory Management System
--- Phase 0: database schema for local XAMPP / MySQL or MariaDB
--- Import this file in phpMyAdmin before building the PHP features.
+-- Clean installation schema for MySQL 8.0.16 or newer.
+-- Import this file with a database account that can create and use
+-- the ofw_dormitory_system database.
+
+SET NAMES utf8mb4;
 
 CREATE DATABASE IF NOT EXISTS ofw_dormitory_system
   CHARACTER SET utf8mb4
@@ -96,13 +99,13 @@ CREATE TABLE tenants (
   date_moved_out DATE NULL,
   photo_path VARCHAR(255) NULL,
   status ENUM('active', 'moved_out') NOT NULL DEFAULT 'active',
-  active_room_id INT UNSIGNED AS (CASE WHEN status = 'active' THEN room_id ELSE NULL END) PERSISTENT,
-  active_bed_number VARCHAR(30) AS (CASE WHEN status = 'active' THEN LOWER(TRIM(bed_number)) ELSE NULL END) PERSISTENT,
+  active_room_id INT UNSIGNED AS (CASE WHEN status = 'active' THEN room_id ELSE NULL END) STORED,
+  active_bed_number VARCHAR(30) AS (CASE WHEN status = 'active' THEN LOWER(TRIM(bed_number)) ELSE NULL END) STORED,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_tenants_employer FOREIGN KEY (employer_id) REFERENCES employers(id) ON DELETE SET NULL,
   CONSTRAINT fk_tenants_agency FOREIGN KEY (agency_id) REFERENCES agencies(id) ON DELETE SET NULL,
-  CONSTRAINT fk_tenants_room FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE SET NULL,
+  CONSTRAINT fk_tenants_room FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE RESTRICT,
   CONSTRAINT chk_tenant_move_dates CHECK (date_moved_out IS NULL OR date_moved_out >= date_moved_in),
   CONSTRAINT uq_active_room_bed UNIQUE (active_room_id, active_bed_number),
   INDEX idx_tenants_status_room (status, room_id),
@@ -131,7 +134,7 @@ CREATE TABLE tenant_item_assignments (
   returned_on DATE NULL,
   return_notes VARCHAR(1000) NULL,
   returned_by INT UNSIGNED NULL,
-  active_item_id INT UNSIGNED AS (CASE WHEN returned_on IS NULL THEN item_id ELSE NULL END) PERSISTENT,
+  active_item_id INT UNSIGNED AS (CASE WHEN returned_on IS NULL THEN item_id ELSE NULL END) STORED,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_tenant_item_assignments_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE RESTRICT,
