@@ -15,12 +15,25 @@ function tenant_item_report(PDO $pdo,string $itemStatus,string $tenantStatus,int
  $sql="SELECT a.id,t.full_name,t.employee_id,t.status tenant_status,d.name dormitory,r.room_number,i.name item_name,a.reference_no,a.issued_on,issuer.full_name issued_by,a.issue_notes,a.returned_on,receiver.full_name returned_by,a.return_notes FROM tenant_item_assignments a INNER JOIN tenants t ON t.id=a.tenant_id INNER JOIN tenant_items i ON i.id=a.item_id LEFT JOIN rooms r ON r.id=t.room_id LEFT JOIN dormitories d ON d.id=r.dormitory_id LEFT JOIN users issuer ON issuer.id=a.issued_by LEFT JOIN users receiver ON receiver.id=a.returned_by".($where?' WHERE '.implode(' AND ',$where):'').' ORDER BY (a.returned_on IS NULL) DESC,i.name,t.full_name,a.issued_on DESC,a.id DESC';
  $statement=$pdo->prepare($sql);$statement->execute($params);return $statement->fetchAll();
 }
+function tenant_vehicle_report(PDO $pdo,string $tenantStatus,string $vehicleType,int $dormitoryId,string $search):array{
+ $where=[];$params=[];
+ if($tenantStatus!=='all'){$where[]='t.status=:vehicle_tenant_status';$params['vehicle_tenant_status']=$tenantStatus;}
+ if($vehicleType!=='all'){$where[]='v.vehicle_type=:vehicle_type';$params['vehicle_type']=$vehicleType;}
+ if($dormitoryId>0){$where[]='d.id=:vehicle_dormitory_id';$params['vehicle_dormitory_id']=$dormitoryId;}
+ if($search!==''){$where[]='(t.full_name LIKE :vehicle_q_tenant OR v.license_plate_no LIKE :vehicle_q_plate OR v.sticker_no LIKE :vehicle_q_sticker)';$term='%'.$search.'%';$params['vehicle_q_tenant']=$term;$params['vehicle_q_plate']=$term;$params['vehicle_q_sticker']=$term;}
+ $sql="SELECT v.id,t.full_name,t.employee_id,t.status tenant_status,d.name dormitory,r.room_number,v.vehicle_type,v.license_plate_no,v.sticker_no,v.registration_date,v.notes FROM tenant_vehicles v INNER JOIN tenants t ON t.id=v.tenant_id LEFT JOIN rooms r ON r.id=t.room_id LEFT JOIN dormitories d ON d.id=r.dormitory_id".($where?' WHERE '.implode(' AND ',$where):'').' ORDER BY t.full_name,v.vehicle_type,v.license_plate_no';
+ $statement=$pdo->prepare($sql);$statement->execute($params);return $statement->fetchAll();
+}
 $month=report_month($_GET['month']??'');$action=(string)($_GET['action']??'');$type=(string)($_GET['type']??'');
 $requestedItemStatus=(string)($_GET['item_status']??'issued');
 $requestedTenantStatus=(string)($_GET['tenant_status']??'all');
 $itemStatus=in_array($requestedItemStatus,['issued','returned','all'],true)?$requestedItemStatus:'issued';
 $tenantStatus=in_array($requestedTenantStatus,['active','moved_out','all'],true)?$requestedTenantStatus:'all';
 $reportItemId=report_positive_id($_GET['item_id']??null);$reportDormitoryId=report_positive_id($_GET['dormitory_id']??null);
+$vehicleTypes=['car'=>'Car','motorcycle'=>'Motorcycle','scooter'=>'Scooter','bicycle'=>'Bicycle','van'=>'Van','truck'=>'Truck','other'=>'Other'];
+$requestedVehicleTenantStatus=(string)($_GET['vehicle_tenant_status']??'all');$vehicleTenantStatus=in_array($requestedVehicleTenantStatus,['active','moved_out','all'],true)?$requestedVehicleTenantStatus:'all';
+$requestedVehicleType=(string)($_GET['vehicle_type']??'all');$vehicleType=$requestedVehicleType==='all'||isset($vehicleTypes[$requestedVehicleType])?$requestedVehicleType:'all';
+$vehicleDormitoryId=report_positive_id($_GET['vehicle_dormitory_id']??null);$vehicleSearch=mb_substr(trim((string)($_GET['vehicle_q']??'')),0,100);
 if($action==='export'){
  if($type==='payments'){$s=$pdo->prepare('SELECT t.full_name,p.amount,p.payment_month,p.payment_date,p.payment_method,p.reference_no,p.notes FROM payments p INNER JOIN tenants t ON t.id=p.tenant_id WHERE p.payment_month=:month ORDER BY p.payment_date,p.id');$s->execute(['month'=>$month.'-01']);$rows=[];foreach($s as $r)$rows[]=[$r['full_name'],$r['amount'],substr($r['payment_month'],0,7),$r['payment_date'],str_replace('_',' ',$r['payment_method']),$r['reference_no'],$r['notes']];csv_out('payments-'.$month.'.csv',['Tenant','Amount (NT$)','For Month','Paid On','Method','Reference','Notes'],$rows);}
  if($type==='outstanding'){$s=$pdo->prepare("SELECT t.full_name,t.monthly_rent,t.contact_no,t.employee_id,COALESCE(SUM(p.amount),0) paid_amount,GREATEST(t.monthly_rent-COALESCE(SUM(p.amount),0),0) outstanding_amount FROM tenants t LEFT JOIN payments p ON p.tenant_id=t.id AND p.payment_month=:month WHERE t.status='active' AND t.monthly_rent>0 GROUP BY t.id,t.full_name,t.monthly_rent,t.contact_no,t.employee_id HAVING COALESCE(SUM(p.amount),0)<t.monthly_rent ORDER BY t.full_name");$s->execute(['month'=>$month.'-01']);$rows=[];foreach($s as $r)$rows[]=[$r['full_name'],$r['monthly_rent'],$r['paid_amount'],$r['outstanding_amount'],$r['contact_no'],$r['employee_id']];csv_out('outstanding-'.$month.'.csv',['Tenant','Monthly Rent (NT$)','Paid (NT$)','Balance (NT$)','Contact','Employee ID'],$rows);}
@@ -40,6 +53,7 @@ if($action==='export'){
   csv_out('schedule-calendar.csv',['Audience','Name','Employee ID / Role / Shift','Event Type','Start Date','End Date','Notes'],$rows);
  }
  if($type==='tenant_items'){$data=tenant_item_report($pdo,$itemStatus,$tenantStatus,$reportItemId,$reportDormitoryId);$rows=[];foreach($data as $r)$rows[]=[$r['full_name'],$r['employee_id'],$r['tenant_status'],$r['dormitory'],$r['room_number'],$r['item_name'],$r['reference_no'],$r['issued_on'],$r['issued_by'],$r['issue_notes'],$r['returned_on'],$r['returned_by'],$r['return_notes'],$r['returned_on']?'Returned':'Issued'];$suffix=$itemStatus==='issued'?'currently-issued':($itemStatus==='returned'?'returned':'history');csv_out('tenant-items-'.$suffix.'.csv',['Tenant','Employee ID','Tenant Status','Dormitory','Room','Item','Reference','Issued On','Issued By','Issue Notes','Returned On','Returned By','Return Notes','Item Status'],$rows);}
+ if($type==='tenant_vehicles'){$data=tenant_vehicle_report($pdo,$vehicleTenantStatus,$vehicleType,$vehicleDormitoryId,$vehicleSearch);$rows=[];foreach($data as $r)$rows[]=[$r['full_name'],$r['employee_id'],$r['tenant_status'],$r['dormitory'],$r['room_number'],$vehicleTypes[$r['vehicle_type']]??ucwords($r['vehicle_type']),$r['license_plate_no'],$r['sticker_no'],$r['registration_date'],$r['notes']];csv_out('tenant-vehicles.csv',['Tenant','Employee ID','Tenant Status','Dormitory','Room','Vehicle Type','License Plate Number','Sticker Number','Registration Date','Notes'],$rows);}
  http_response_code(404);exit('Unknown report.');
 }
 $paymentTotals=$pdo->query("SELECT DATE_FORMAT(payment_month,'%Y-%m') month,COUNT(*) count,SUM(amount) total FROM payments GROUP BY payment_month ORDER BY payment_month DESC LIMIT 12")->fetchAll();
@@ -51,6 +65,8 @@ $tenantItemRows=tenant_item_report($pdo,$itemStatus,$tenantStatus,$reportItemId,
 $tenantItemCatalog=$pdo->query('SELECT id,name,is_active FROM tenant_items ORDER BY is_active DESC,name')->fetchAll();
 $reportDormitories=$pdo->query('SELECT id,name FROM dormitories ORDER BY name')->fetchAll();
 $tenantItemExportQuery=http_build_query(['action'=>'export','type'=>'tenant_items','item_status'=>$itemStatus,'tenant_status'=>$tenantStatus,'item_id'=>$reportItemId?:null,'dormitory_id'=>$reportDormitoryId?:null]);
+$tenantVehicleRows=tenant_vehicle_report($pdo,$vehicleTenantStatus,$vehicleType,$vehicleDormitoryId,$vehicleSearch);
+$tenantVehicleExportQuery=http_build_query(['action'=>'export','type'=>'tenant_vehicles','vehicle_tenant_status'=>$vehicleTenantStatus,'vehicle_type'=>$vehicleType,'vehicle_dormitory_id'=>$vehicleDormitoryId?:null,'vehicle_q'=>$vehicleSearch?:null]);
 $selectedCollected=0.0;
 foreach($paymentTotals as $paymentTotal){if($paymentTotal['month']===$month){$selectedCollected=(float)$paymentTotal['total'];break;}}
 $outstandingRent=array_sum(array_column($outstanding,'outstanding_amount'));
@@ -88,6 +104,18 @@ page_start('Reports',$user,'reports');?>
 <section class="panel table-panel reports-panel">
   <div class="report-title"><div><p class="eyebrow">Accommodation</p><h2>Room occupancy</h2></div><a class="export-action" href="reports.php?action=export&amp;type=occupancy"><span aria-hidden="true">↓</span> Export CSV</a></div>
   <table><thead><tr><th>Dormitory</th><th>Room</th><th>Capacity</th><th>Occupied</th></tr></thead><tbody><?php if(!$occupancy):?><tr><td colspan="4"><div class="report-empty">No rooms added yet.</div></td></tr><?php else:foreach($occupancy as $row):$rowRate=(int)$row['capacity']>0?(int)round(((int)$row['occupied']/(int)$row['capacity'])*100):0;?><tr><td><strong class="primary-cell"><?=e($row['dormitory'])?></strong></td><td><span class="room-number"><?=e($row['room_number'])?></span></td><td><?=(int)$row['capacity']?></td><td><div class="occupancy-meter"><span><i style="width:<?=$rowRate?>%"></i></span><strong><?=(int)$row['occupied']?> / <?=(int)$row['capacity']?></strong></div></td></tr><?php endforeach;endif;?></tbody></table>
+</section>
+
+<section class="panel table-panel reports-panel tenant-vehicles-report" id="tenant-vehicles-report">
+  <div class="report-title"><div><p class="eyebrow">Vehicle registry</p><h2>Tenant vehicles</h2></div><a class="export-action" href="reports.php?<?=e($tenantVehicleExportQuery)?>"><span aria-hidden="true">↓</span> Export filtered CSV</a></div>
+  <form class="tenant-vehicle-report-filters" method="get" action="reports.php#tenant-vehicles-report">
+    <label>Search<input name="vehicle_q" maxlength="100" value="<?=e($vehicleSearch)?>" placeholder="Tenant, plate, or sticker"></label>
+    <label>Vehicle type<select name="vehicle_type"><option value="all" <?=$vehicleType==='all'?'selected':''?>>All types</option><?php foreach($vehicleTypes as $key=>$label):?><option value="<?=e($key)?>" <?=$vehicleType===$key?'selected':''?>><?=e($label)?></option><?php endforeach;?></select></label>
+    <label>Tenant status<select name="vehicle_tenant_status"><option value="all" <?=$vehicleTenantStatus==='all'?'selected':''?>>All tenants</option><option value="active" <?=$vehicleTenantStatus==='active'?'selected':''?>>Active</option><option value="moved_out" <?=$vehicleTenantStatus==='moved_out'?'selected':''?>>Moved out</option></select></label>
+    <label>Dormitory<select name="vehicle_dormitory_id"><option value="">All dormitories</option><?php foreach($reportDormitories as $dormitory):?><option value="<?=(int)$dormitory['id']?>" <?=$vehicleDormitoryId===(int)$dormitory['id']?'selected':''?>><?=e($dormitory['name'])?></option><?php endforeach;?></select></label>
+    <button type="submit">Apply filters</button>
+  </form>
+  <div class="table-scroll"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Plate number</th><th>Sticker number</th><th>Registration date</th><th>Notes</th></tr></thead><tbody><?php if(!$tenantVehicleRows):?><tr><td colspan="7"><div class="report-empty">No vehicles match these filters.</div></td></tr><?php else:foreach($tenantVehicleRows as $row):?><tr><td><strong class="primary-cell"><?=e($row['full_name'])?></strong><small><?=e($row['employee_id']?:ucwords(str_replace('_',' ',$row['tenant_status'])))?></small></td><td><?=e(($row['dormitory']?:'Unassigned').($row['room_number']?' · '.$row['room_number']:''))?></td><td><?=e($vehicleTypes[$row['vehicle_type']]??ucwords($row['vehicle_type']))?></td><td><strong><?=e($row['license_plate_no'])?></strong></td><td><?=e($row['sticker_no']?:'—')?></td><td><?=e($row['registration_date']?:'—')?></td><td><?=e($row['notes']?:'—')?></td></tr><?php endforeach;endif;?></tbody></table></div>
 </section>
 
 <section class="panel table-panel reports-panel tenant-items-report" id="tenant-items-report">

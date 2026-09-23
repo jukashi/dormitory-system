@@ -5,6 +5,8 @@ Complete these checks using a test account and sample records before entering re
 - [ ] Log in with the admin account; log out; confirm that protected URLs redirect to login.
 - [ ] Create a dormitory and room; edit them; verify a room cannot be deleted while linked to a tenant or reduced below its active occupancy.
 - [ ] Add a tenant; upload a JPG/PNG/WebP image under 2 MB; verify profile information and photo display.
+- [ ] From a tenant profile, confirm only an administrator can add, edit, or remove vehicles; verify vehicle type and plate are required while sticker, registration date, and notes are optional.
+- [ ] Attempt to register a duplicate license plate; confirm it is rejected, then search and filter the Tenant Vehicles report and verify its CSV matches the displayed rows.
 - [ ] As an administrator, add, rename, deactivate, and reactivate a tenant item under Dormitories & Rooms; confirm inactive items cannot be newly issued.
 - [ ] Add a tenant with move-in item checkboxes selected; confirm each item appears on the tenant profile with the correct issue date and issuing user.
 - [ ] Issue an item with a reference number, reject a duplicate active assignment, mark it returned, and issue the same item again; confirm the complete history remains visible.

@@ -8,6 +8,7 @@ $user = require_permission('tenants');
 $pdo = db();
 const TENANT_EVENT_TYPES = ['da' => 'DA — Day Shift A-PAN', 'db' => 'DB — Day Shift B-PAN', 'na' => 'NA — Night Shift A-PAN', 'nb' => 'NB — Night Shift B-PAN', 'work_shift' => 'Work Shift (legacy)', 'day_off' => 'Day Off', 'vacation_leave' => 'Vacation Leave', 'sick_leave' => 'Sick Leave', 'leave' => 'Leave (legacy)', 'flight' => 'Flight', 'appointment' => 'Appointment', 'emergency' => 'Emergency', 'other' => 'Other'];
 const MANUAL_TENANT_EVENT_TYPES = ['vacation_leave' => 'Vacation Leave', 'sick_leave' => 'Sick Leave', 'appointment' => 'Appointment', 'flight' => 'Flight', 'emergency' => 'Emergency', 'other' => 'Other'];
+const VEHICLE_TYPES = ['car' => 'Car', 'motorcycle' => 'Motorcycle', 'scooter' => 'Scooter', 'bicycle' => 'Bicycle', 'van' => 'Van', 'truck' => 'Truck', 'other' => 'Other'];
 
 function tenant_id(mixed $value): int { $id = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]); return $id === false ? 0 : (int) $id; }
 function nullable_post(string $name, int $maximum = 255): ?string { $value = trim((string) ($_POST[$name] ?? '')); if (mb_strlen($value) > $maximum) { throw new RuntimeException("$name is too long."); } return $value === '' ? null : $value; }
@@ -109,6 +110,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $imported = tenant_import_apply($pdo, tenant_import_upload($_FILES['tenant_file'] ?? []));
             set_flash($imported . ' tenant' . ($imported === 1 ? '' : 's') . ' imported successfully.');
             redirect('tenants.php');
+        }
+        if (in_array($action, ['save_tenant_vehicle', 'delete_tenant_vehicle'], true)) {
+            if (($user['role'] ?? '') !== 'admin') { throw new RuntimeException('Only administrators can manage tenant vehicles.'); }
+            $tenant = tenant_by_id($pdo, $id);
+            if (!$tenant) { throw new RuntimeException('Tenant not found.'); }
+            $vehicleId = tenant_id($_POST['vehicle_id'] ?? null);
+            if ($action === 'delete_tenant_vehicle') {
+                $statement = $pdo->prepare('DELETE FROM tenant_vehicles WHERE id=:vehicle_id AND tenant_id=:tenant_id');
+                $statement->execute(['vehicle_id' => $vehicleId, 'tenant_id' => $id]);
+                if ($statement->rowCount() !== 1) { throw new RuntimeException('Vehicle record not found.'); }
+                set_flash('Vehicle removed from the tenant profile.');
+                redirect('tenants.php?action=view&id=' . $id . '#tenant-vehicles');
+            }
+            $vehicleType = strtolower((string) ($_POST['vehicle_type'] ?? ''));
+            if (!isset(VEHICLE_TYPES[$vehicleType])) { throw new RuntimeException('Select a valid vehicle type.'); }
+            $licensePlateNo = normalize_upper(nullable_post('license_plate_no', 30));
+            if ($licensePlateNo === null) { throw new RuntimeException('License plate number is required.'); }
+            $stickerNo = normalize_upper(nullable_post('sticker_no', 50));
+            $registrationDate = valid_date(nullable_post('registration_date', 10), 'Registration date');
+            $notes = nullable_post('vehicle_notes', 1000);
+            $duplicate = $pdo->prepare('SELECT 1 FROM tenant_vehicles WHERE license_plate_no=:license_plate_no AND id!=:vehicle_id LIMIT 1');
+            $duplicate->execute(['license_plate_no' => $licensePlateNo, 'vehicle_id' => $vehicleId]);
+            if ($duplicate->fetchColumn()) { throw new RuntimeException('That license plate number is already registered.'); }
+            $data = ['tenant_id' => $id, 'vehicle_type' => $vehicleType, 'license_plate_no' => $licensePlateNo, 'sticker_no' => $stickerNo, 'registration_date' => $registrationDate, 'notes' => $notes];
+            if ($vehicleId > 0) {
+                $data['vehicle_id'] = $vehicleId;
+                $statement = $pdo->prepare('UPDATE tenant_vehicles SET vehicle_type=:vehicle_type,license_plate_no=:license_plate_no,sticker_no=:sticker_no,registration_date=:registration_date,notes=:notes WHERE id=:vehicle_id AND tenant_id=:tenant_id');
+                $statement->execute($data);
+                if ($statement->rowCount() === 0) {
+                    $exists = $pdo->prepare('SELECT 1 FROM tenant_vehicles WHERE id=:vehicle_id AND tenant_id=:tenant_id');
+                    $exists->execute(['vehicle_id' => $vehicleId, 'tenant_id' => $id]);
+                    if (!$exists->fetchColumn()) { throw new RuntimeException('Vehicle record not found.'); }
+                }
+                set_flash('Vehicle updated.');
+            } else {
+                $statement = $pdo->prepare('INSERT INTO tenant_vehicles (tenant_id,vehicle_type,license_plate_no,sticker_no,registration_date,notes) VALUES (:tenant_id,:vehicle_type,:license_plate_no,:sticker_no,:registration_date,:notes)');
+                $statement->execute($data);
+                set_flash('Vehicle added to the tenant profile.');
+            }
+            redirect('tenants.php?action=view&id=' . $id . '#tenant-vehicles');
         }
         if ($action === 'move_out') {
             $tenant = tenant_by_id($pdo, $id);
@@ -257,9 +298,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       if ($pdo->inTransaction()) { $pdo->rollBack(); }
         delete_tenant_photo($photoPath);
         if ($exception->getCode() === '23000' && $action === 'delete_tenant') {
-            set_flash('This tenant cannot be permanently deleted while payment, visitor, or item-assignment history refers to them. Move the tenant out instead.', 'error');
+            set_flash('This tenant cannot be permanently deleted while payment, visitor, vehicle, or item-assignment history refers to them. Move the tenant out instead.', 'error');
         } elseif ($exception->getCode() === '23000' && $action === 'issue_tenant_item') {
             set_flash('That item is already issued to this tenant.', 'error');
+        } elseif ($exception->getCode() === '23000' && $action === 'save_tenant_vehicle') {
+            set_flash('That license plate number is already registered.', 'error');
         } elseif ($exception->getCode() === '23000') {
             set_flash('The passport, ARC, or active room and bed assignment is already in use.', 'error');
         } else {
@@ -268,6 +311,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } catch (RuntimeException $exception) { if ($pdo->inTransaction()) { $pdo->rollBack(); } delete_tenant_photo($photoPath); set_flash($exception->getMessage(), 'error'); }
     if ($action === 'import_tenants') { redirect('tenants.php?action=import'); }
     if (in_array($action, ['issue_tenant_item', 'return_tenant_item'], true)) { redirect('tenants.php?action=view&id=' . $id); }
+    if (in_array($action, ['save_tenant_vehicle', 'delete_tenant_vehicle'], true)) { redirect('tenants.php?action=view&id=' . $id . '#tenant-vehicles'); }
     if (in_array($action, ['save_profile_event', 'update_profile_event'], true)) { redirect('tenants.php?action=view&id=' . $id); }
     if ($action === 'save_tenant') { remember_tenant_form($_POST, $id); }
     redirect($id > 0 ? 'tenants.php?action=edit&id=' . $id : 'tenants.php?action=add');
@@ -433,6 +477,9 @@ if ($action === 'view') {
     $activeAssignmentItemIds = array_map(fn(array $assignment): int => (int) $assignment['item_id'], $activeItemAssignments);
     $issuableTenantItems = array_values(array_filter($activeTenantItems, fn(array $item): bool => !in_array((int) $item['id'], $activeAssignmentItemIds, true)));
     $outstandingItemCount = count($activeItemAssignments);
+    $statement = $pdo->prepare('SELECT id,vehicle_type,license_plate_no,sticker_no,registration_date,notes FROM tenant_vehicles WHERE tenant_id=:tenant_id ORDER BY vehicle_type,license_plate_no,id');
+    $statement->execute(['tenant_id' => $id]);
+    $tenantVehicles = $statement->fetchAll();
     page_start('Tenant Profile', $user, 'tenants');
     ?>
     <?php if ($flash): ?><p class="flash <?= e($flash['type']) ?>" role="status"><?= e($flash['message']) ?></p><?php endif; ?>
@@ -441,6 +488,14 @@ if ($action === 'view') {
       <div class="tenant-profile-actions"><a class="hero-link" href="tenants.php"><span aria-hidden="true">←</span> Back to tenants</a><a class="button-link" href="tenants.php?action=edit&amp;id=<?= (int) $tenant['id'] ?>">Edit profile <span aria-hidden="true">→</span></a><?php if (($user['role'] ?? '') === 'admin'): ?><form method="post" onsubmit="return confirm('Permanently delete this tenant record? This cannot be undone.');"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="delete_tenant"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><button class="danger" type="submit">Delete permanently</button></form><?php endif; ?></div>
     </section>
     <section class="profile panel"><div class="photo"><?php if ($tenant['photo_path']): ?><img src="tenant_photo.php?id=<?= (int) $tenant['id'] ?>" alt="Photo of <?= e($tenant['full_name']) ?>"><?php else: ?>No photo<?php endif; ?></div><div><p><strong>Status:</strong> <?= e(ucwords(str_replace('_', ' ', $tenant['status']))) ?></p><p><strong>Room/bed:</strong> <?= e(($tenant['dormitory_name'] ?? 'Unassigned') . ' — ' . ($tenant['room_number'] ?? '') . ' ' . ($tenant['bed_number'] ?? '')) ?></p><p><strong>Shift:</strong> <?= $tenant['shift_code'] ? e(TENANT_EVENT_TYPES[strtolower($tenant['shift_code'])] ?? $tenant['shift_code']) : 'Not set' ?></p><p><strong>Contact:</strong> <?= e($tenant['contact_no']) ?></p><p><strong>Employer:</strong> <?= e($tenant['employer_name']) ?><?= $tenant['designation'] ? ' — ' . e($tenant['designation']) : '' ?></p><p><strong>Agency:</strong> <?= e($tenant['agency_name']) ?></p><p><strong>Passport:</strong> <?= e($tenant['passport_no']) ?><?= $tenant['passport_expiry'] ? ' (expires ' . e($tenant['passport_expiry']) . ')' : '' ?></p><p><strong>ARC:</strong> <?= e($tenant['arc_no']) ?><?= $tenant['arc_expiry'] ? ' (expires ' . e($tenant['arc_expiry']) . ')' : '' ?></p><p><strong>Emergency contact:</strong> <?= e($tenant['emergency_contact_name']) ?> <?= e($tenant['emergency_contact_no']) ?></p><p class="tenant-profile-comments"><strong>Additional comments:</strong> <?= $tenant['additional_comments'] ? nl2br(e($tenant['additional_comments'])) : '<span class="not-set">None</span>' ?></p></div></section>
+    <section class="panel tenant-vehicles-card" id="tenant-vehicles">
+      <div class="tenant-vehicles-heading"><div><p class="eyebrow">Vehicle registry</p><h2>Vehicles</h2><p><?= count($tenantVehicles) ?> registered vehicle<?= count($tenantVehicles) === 1 ? '' : 's' ?></p></div><div class="tenant-vehicle-heading-actions"><a href="reports.php?vehicle_tenant_status=all#tenant-vehicles-report" class="table-action">Open vehicles report</a><?php if (($user['role'] ?? '') === 'admin'): ?><button type="button" class="primary" id="show-add-vehicle">+ Add vehicle</button><?php endif; ?></div></div>
+      <?php if (($user['role'] ?? '') === 'admin'): ?>
+        <form method="post" class="tenant-vehicle-form" id="add-vehicle-form" hidden><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="save_tenant_vehicle"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><h3>Add vehicle</h3><div class="form-grid"><label>Vehicle type *<select name="vehicle_type" required><option value="">— Select type —</option><?php foreach (VEHICLE_TYPES as $key => $label): ?><option value="<?= e($key) ?>"><?= e($label) ?></option><?php endforeach; ?></select></label><label>License plate number *<input name="license_plate_no" maxlength="30" required></label><label>Sticker number <small>(optional)</small><input name="sticker_no" maxlength="50"></label><label>Registration date <small>(optional)</small><input type="date" name="registration_date"></label><label class="tenant-comments-field">Notes <small>(optional)</small><textarea name="vehicle_notes" maxlength="1000" rows="3"></textarea></label></div><button class="primary" type="submit">Save vehicle</button> <button class="cancel vehicle-form-cancel" type="button">Cancel</button></form>
+      <?php endif; ?>
+      <?php if (!$tenantVehicles): ?><div class="tenant-vehicles-empty">No vehicles are registered for this tenant.</div><?php else: ?><div class="table-scroll"><table class="tenant-vehicles-table"><thead><tr><th>Type</th><th>Plate number</th><th>Sticker number</th><th>Registration date</th><th>Notes</th><?php if (($user['role'] ?? '') === 'admin'): ?><th><span class="visually-hidden">Actions</span></th><?php endif; ?></tr></thead><tbody><?php foreach ($tenantVehicles as $vehicle): ?><tr><td><?= e(VEHICLE_TYPES[$vehicle['vehicle_type']] ?? ucwords($vehicle['vehicle_type'])) ?></td><td><strong><?= e($vehicle['license_plate_no']) ?></strong></td><td><?= e($vehicle['sticker_no'] ?: '—') ?></td><td><?= e($vehicle['registration_date'] ?: '—') ?></td><td><?= $vehicle['notes'] ? nl2br(e($vehicle['notes'])) : '—' ?></td><?php if (($user['role'] ?? '') === 'admin'): ?><td><details class="tenant-vehicle-edit"><summary>Edit</summary><form method="post"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="save_tenant_vehicle"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><input type="hidden" name="vehicle_id" value="<?= (int) $vehicle['id'] ?>"><label>Vehicle type *<select name="vehicle_type" required><?php foreach (VEHICLE_TYPES as $key => $label): ?><option value="<?= e($key) ?>" <?= $vehicle['vehicle_type'] === $key ? 'selected' : '' ?>><?= e($label) ?></option><?php endforeach; ?></select></label><label>License plate number *<input name="license_plate_no" maxlength="30" value="<?= e($vehicle['license_plate_no']) ?>" required></label><label>Sticker number<input name="sticker_no" maxlength="50" value="<?= e($vehicle['sticker_no']) ?>"></label><label>Registration date<input type="date" name="registration_date" value="<?= e($vehicle['registration_date']) ?>"></label><label>Notes<textarea name="vehicle_notes" maxlength="1000" rows="3"><?= e($vehicle['notes']) ?></textarea></label><button class="primary" type="submit">Save changes</button></form><form method="post" onsubmit="return confirm('Remove this vehicle record?');"><input type="hidden" name="csrf_token" value="<?= csrf_token() ?>"><input type="hidden" name="action" value="delete_tenant_vehicle"><input type="hidden" name="id" value="<?= (int) $tenant['id'] ?>"><input type="hidden" name="vehicle_id" value="<?= (int) $vehicle['id'] ?>"><button class="danger" type="submit">Remove vehicle</button></form></details></td><?php endif; ?></tr><?php endforeach; ?></tbody></table></div><?php endif; ?>
+    </section>
+    <?php if (($user['role'] ?? '') === 'admin'): ?><script>(()=>{const button=document.getElementById('show-add-vehicle');const form=document.getElementById('add-vehicle-form');const cancel=form?.querySelector('.vehicle-form-cancel');button?.addEventListener('click',()=>{form.hidden=false;button.hidden=true;form.querySelector('select')?.focus();});cancel?.addEventListener('click',()=>{form.hidden=true;button.hidden=false;});})();</script><?php endif; ?>
     <section class="panel tenant-items-profile-card">
       <div class="tenant-items-profile-heading"><div><p class="eyebrow">Property accountability</p><h2>Assigned items</h2><p><?= $outstandingItemCount ?> item<?= $outstandingItemCount === 1 ? '' : 's' ?> currently held</p></div><a href="reports.php?item_status=issued&amp;tenant_status=all" class="table-action">Open items report</a></div>
       <?php if (!$activeItemAssignments): ?><div class="tenant-items-clear">No items are currently issued to this tenant.</div><?php else: ?>
